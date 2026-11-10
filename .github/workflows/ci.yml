@@ -90,9 +90,6 @@ jobs:
       matrix:
         api: [29, 36]
     env:
-      BHASH_COMPILER_JAR: ${{ runner.temp }}/bhash-toolchain/compiler.jar
-      BHASH_STUDIO_BUILD_ROOT: ${{ runner.temp }}/studio-builds
-      BHASH_STUDIO_TEST_OUTPUT: ${{ runner.temp }}/studio-source
       BHASH_STUDIO_ANDROID_TESTS: '1'
       BHASH_STUDIO_DEVICE_TESTS: '1'
     steps:
@@ -106,6 +103,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Configure temporary build paths
+        run: |
+          echo "BHASH_COMPILER_JAR=$RUNNER_TEMP/bhash-toolchain/compiler.jar" >> "$GITHUB_ENV"
+          echo "BHASH_STUDIO_BUILD_ROOT=$RUNNER_TEMP/studio-builds" >> "$GITHUB_ENV"
+          echo "BHASH_STUDIO_TEST_OUTPUT=$RUNNER_TEMP/studio-source" >> "$GITHUB_ENV"
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           cache-provider: basic
@@ -183,3 +185,4 @@ jobs:
               raise SystemExit(f"Required CI jobs did not succeed: {failed}")
           print("All required CI jobs passed.")
           PY
+
