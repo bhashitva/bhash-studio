@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bhash-studio"
+version = "0.1.0"
+description = "Hindi-first Bhash application development studio"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+authors = [{name = "Bhashitva"}]
+dependencies = []
+
+[project.scripts]
+bhash-studio = "bhash_studio.app:main"
+
+[tool.setuptools]
+packages = ["bhash_studio"]
+
+[tool.setuptools.package-data]
+bhash_studio = ["BhashStudioLauncher.java"]
