@@ -36,3 +36,5 @@ python -m unittest discover -s tests -p test_integration.py -v
 7. Test InScript and phonetic IME composition, conjunct caret movement, selection, copy/paste, undo and screen-reader access. Record host, Tk and OS versions. This prototype has yet to establish the production acceptance standard for these areas.
 
 CI runs core tests on Windows, Ubuntu and macOS, plus the Tk workflow on Windows. Android SDK builds are opt-in local integration checks in this first release.
+
+See [the prototype verification record](verification.md) for completed checks and their limits. Restricted build accounts may need writable Gradle and Android user directories and a workspace-local debug signing configuration. Keep any generated debug key out of Git. An existing full Android installation normally supplies its own debug signing setup.
