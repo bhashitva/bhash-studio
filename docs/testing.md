@@ -38,13 +38,13 @@ $env:BHASH_STUDIO_ANDROID_OUTPUT = 'C:\builds\JOB\android'
 python -m unittest discover -s tests -p test_device.py -v
 ```
 
-Use the Java and Android environment configuration above. `ANDROID_SERIAL` is set for this test subprocess only. This wrapper is restricted to emulator serials and expects the default `???????` fixture, including `??????, ??????!`. It checks screen text, tapping the Bhash handler, landscape and portrait transitions, activity recreation, repeated actions, and 40 native calls with nukta, conjuncts and emoji. For other applications, supply expectations appropriate to their handlers through Gradle instrumentation arguments.
+Use the Java and Android environment configuration above. `ANDROID_SERIAL` is set for this test subprocess only. This wrapper is restricted to emulator serials and expects the default `अभिवादन` fixture, including `नमस्ते, दुनिया!`. It checks screen text, tapping the Bhash handler, landscape and portrait transitions, activity recreation, repeated actions, and 40 native calls with nukta, conjuncts and emoji. For other applications, supply expectations appropriate to their handlers through Gradle instrumentation arguments.
 
 ## Manual acceptance
 
 1. Launch the app and create a project using a Hindi display name and a path containing spaces and Hindi characters.
-2. Change the label in ?????.???????? and the greeting returned by ?????.bhash. Check, save and reopen.
-3. Confirm ???? and ????? remain booleans and ????? remains null. Introduce a malformed value and confirm a Hindi message with source position.
+2. Change the label in पर्दा.भाषदृश्य and the greeting returned by मुख्य.bhash. Check, save and reopen.
+3. Confirm सत्य and असत्य remain booleans and रिक्त remains null. Introduce a malformed value and confirm a Hindi message with source position.
 4. Build an APK, run it on an API 29 or later emulator and tap the generated button. Verify the result came from the Bhash function. Rotate and check result text restoration.
 5. Change the source after one build and build again. Confirm isolated output and preserved app identity.
 6. Trigger an external file edit, missing tool, failed build and cancellation. Confirm recoverable state and Hindi action messages.

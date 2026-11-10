@@ -20,7 +20,7 @@ The restricted verification session required a writable copy of the Gradle depen
 
 ## Android emulator runtime checks
 
-The locally running Pixel emulator used Android 10 API 29 and the x86-64 ABI. Its system locale was en-US. The studio-generated app installed successfully and displayed its Hindi title and labels. A manual tap of ??????? ???? in Android Studio's emulator view displayed ??????, ??????!, exercising the normal Bhash runtime startup path.
+The locally running Pixel emulator used Android 10 API 29 and the x86-64 ABI. Its system locale was en-US. The studio-generated app installed successfully and displayed its Hindi title and labels. A manual tap of अभिवादन करें in Android Studio's emulator view displayed नमस्ते, दुनिया!, exercising the normal Bhash runtime startup path.
 
 All three generated Android instrumentation tests passed in approximately 30 seconds, with zero failures or skipped cases.
 
