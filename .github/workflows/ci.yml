@@ -1,0 +1,185 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: '1'
+
+jobs:
+  core:
+    name: Core ${{ matrix.os }} Python ${{ matrix.python }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.11', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile Python sources
+        run: python -m compileall -q bhash_studio tests
+      - name: Core regression tests
+        run: python -m unittest discover -s tests -v
+      - name: Windows desktop workflow
+        if: runner.os == 'Windows'
+        env:
+          BHASH_STUDIO_GUI_TESTS: '1'
+        run: python -m unittest discover -s tests -p test_gui.py -v
+      - name: Linux desktop workflow
+        if: runner.os == 'Linux'
+        env:
+          BHASH_STUDIO_GUI_TESTS: '1'
+        run: xvfb-run -a python -m unittest discover -s tests -p test_gui.py -v
+
+  package:
+    name: Python package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Build wheel
+        run: python -m pip wheel --no-deps . --wheel-dir dist
+      - name: Verify packaged launcher and entry point
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          wheels = list(Path("dist").glob("*.whl"))
+          assert len(wheels) == 1, "Expected one studio wheel"
+          with ZipFile(wheels[0]) as archive:
+              names = archive.namelist()
+              assert "bhash_studio/BhashStudioLauncher.java" in names
+              assert "bhash_studio/__main__.py" in names
+              entry = next(name for name in names if name.endswith(".dist-info/entry_points.txt"))
+              assert "bhash-studio = bhash_studio.app:main" in archive.read(entry).decode()
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-package
+          path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 14
+
+  android:
+    name: Android API ${{ matrix.api }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [29, 36]
+    env:
+      BHASH_COMPILER_JAR: ${{ runner.temp }}/bhash-toolchain/compiler.jar
+      BHASH_STUDIO_BUILD_ROOT: ${{ runner.temp }}/studio-builds
+      BHASH_STUDIO_TEST_OUTPUT: ${{ runner.temp }}/studio-source
+      BHASH_STUDIO_ANDROID_TESTS: '1'
+      BHASH_STUDIO_DEVICE_TESTS: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-provider: basic
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+      - name: Fetch checksum-pinned Bhash compiler
+        run: |
+          mkdir -p "$(dirname "$BHASH_COMPILER_JAR")"
+          curl --fail --location --retry 3 \
+            https://github.com/bhashitva/bhash/releases/download/bhash-0.25.0/bhash-compiler-0.25.0.jar \
+            --output "$BHASH_COMPILER_JAR"
+          echo "9e353b85365c50367ec008486d8ef83eeeb550a1dd9dbcc9d889f79dab904162  $BHASH_COMPILER_JAR" | sha256sum --check
+      - name: Install pinned Android build components
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "platforms;android-36" "build-tools;35.0.0" "ndk;28.2.13676358"
+      - name: Build real Android APK for ARM64 and x86-64
+        run: python -m unittest discover -s tests -p test_integration.py -v
+      - name: Locate generated Android project
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          outputs = list(Path(os.environ["BHASH_STUDIO_BUILD_ROOT"]).glob("*/android"))
+          assert len(outputs) == 1, "Expected one generated Android project"
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as stream:
+              stream.write(f"BHASH_STUDIO_ANDROID_OUTPUT={outputs[0]}\n")
+          PY
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run real emulator lifecycle and Unicode tests
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          emulator-boot-timeout: 600
+          script: python -m unittest discover -s tests -p test_device.py -v
+      - name: Upload APKs and diagnostic results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-api-${{ matrix.api }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/studio-builds/**/outputs/apk/**/*.apk
+            ${{ runner.temp }}/studio-builds/**/device-results.xml
+            ${{ runner.temp }}/studio-builds/**/instrumentation-output.txt
+            ${{ runner.temp }}/studio-builds/**/device-test.log
+            ${{ runner.temp }}/studio-builds/**/tool-output.log
+            ${{ runner.temp }}/studio-builds/**/build-inputs.json
+
+  ci:
+    name: CI checks
+    if: always()
+    needs: [core, package, android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to succeed
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          results = json.loads(os.environ["JOB_RESULTS"])
+          failed = {name: job["result"] for name, job in results.items() if job["result"] != "success"}
+          if failed:
+              raise SystemExit(f"Required CI jobs did not succeed: {failed}")
+          print("All required CI jobs passed.")
+          PY

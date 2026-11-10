@@ -50,6 +50,12 @@ Use the Java and Android environment configuration above. `ANDROID_SERIAL` is se
 6. Trigger an external file edit, missing tool, failed build and cancellation. Confirm recoverable state and Hindi action messages.
 7. Test InScript and phonetic IME composition, conjunct caret movement, selection, copy/paste, undo and screen-reader access. Record host, Tk and OS versions. This prototype has yet to establish the production acceptance standard for these areas.
 
-CI runs core tests on Windows, Ubuntu and macOS, plus the Tk workflow on Windows. Android SDK builds are opt-in local integration checks in this first release.
+## GitHub CI
+
+The CI workflow runs on pushes, pull requests and manual dispatches. It covers Python 3.11 and 3.12 on Windows, Ubuntu and macOS. Windows runs the real Tk desktop workflow, and Ubuntu runs it under a virtual display. A separate job builds the Python wheel and verifies the console entry point and bundled Java launcher.
+
+Android jobs download Bhash 0.25.0 and verify its fixed SHA-256 before execution. Java 21, Android platform 36, Build Tools 35.0.0 and NDK 28.2.13676358 build the real application for ARM64 and x86-64. Hardware-accelerated x86-64 emulators on API 29 and API 36 run the instrumentation and cold-launch wrapper. Android checks run automatically in GitHub and remain opt-in when running tests locally.
+
+Actions are pinned to commit SHAs. Workflow credentials have read-only repository access and checkout does not persist them. Pull-request runs use read-only Gradle caches. APKs, test results, logs and the Python wheel are retained as downloadable workflow artifacts for 14 days. The stable `CI checks` job succeeds only when every core, package and Android matrix job succeeds, making it suitable as the required branch check.
 
 See [the prototype verification record](verification.md) for completed checks and their limits. Restricted build accounts may need writable Gradle and Android user directories and a workspace-local debug signing configuration. Keep any generated debug key out of Git. An existing full Android installation normally supplies its own debug signing setup.
