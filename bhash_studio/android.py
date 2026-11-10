@@ -32,7 +32,7 @@ def kotlin_text(text):
 
 
 def generate_activity(screen):
-    bindings = {name: f"studio_action_{index}" for index, name in enumerate(handlers(screen))}
+    bindings = {name: f"bhash_studio_action_{index}" for index, name in enumerate(handlers(screen))}
 
     def emit(node, indent):
         pad = " " * indent
@@ -99,7 +99,7 @@ class MainActivity : ComponentActivity() {
 
 
 def generate_exports(screen):
-    return "".join(f"studio_action_{i} = {name}(पाठ) -> पाठ\n" for i, name in enumerate(handlers(screen)))
+    return "".join(f"bhash_studio_action_{i} = {name}(पाठ) -> पाठ\n" for i, name in enumerate(handlers(screen)))
 
 
 @dataclass(frozen=True)
@@ -235,12 +235,13 @@ class AndroidTarget:
         exports = generate_exports(screen)
         if not exports:
             atomic_write(source / "studio.bhash", 'फलन भाष_दृश्य(मान: पाठ) -> पाठ { लौटाओ मान; }\n')
-            exports = "studio_screen = भाष_दृश्य(पाठ) -> पाठ\n"
+            exports = "bhash_studio_screen = भाष_दृश्य(पाठ) -> पाठ\n"
         atomic_write(output / "bhash.exports", exports)
         activity = output / "app/src/main/java/org/bhashitva/androidstarter/MainActivity.kt"
         atomic_write(activity, generate_activity(screen))
         manifest_path = output / "app/src/main/AndroidManifest.xml"
         manifest = ET.parse(manifest_path)
+        ET.register_namespace("android", "http://schemas.android.com/apk/res/android")
         if config["संजाल_अनुमति"]:
             ET.SubElement(manifest.getroot(), "uses-permission", {"{http://schemas.android.com/apk/res/android}name": "android.permission.INTERNET"})
         manifest.write(manifest_path, encoding="utf-8", xml_declaration=True)

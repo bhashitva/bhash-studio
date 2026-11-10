@@ -36,7 +36,7 @@ class AndroidTests(unittest.TestCase):
             (destination / "gradle.properties").write_text("", encoding="utf-8")
             (destination / "app/src/main/java/org/bhashitva/androidstarter").mkdir(parents=True)
             manifest = destination / "app/src/main/AndroidManifest.xml"
-            manifest.write_text('<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application/></manifest>', encoding="utf-8")
+            manifest.write_text('<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:label="@string/app_name"/></manifest>', encoding="utf-8")
         elif arguments[1] in {"build", "run"}:
             apk = Path(arguments[2]) / "app/build/outputs/apk/debug/app-debug.apk"
             apk.parent.mkdir(parents=True)
@@ -66,6 +66,8 @@ class AndroidTests(unittest.TestCase):
         snapshot[CONFIG] = dumps(config)
         output = self.execute(snapshot=snapshot)
         self.assertIn("android.permission.INTERNET", (output / "app/src/main/AndroidManifest.xml").read_text())
+        self.assertIn('xmlns:android=', (output / "app/src/main/AndroidManifest.xml").read_text())
+        self.assertNotIn('xmlns:ns0=', (output / "app/src/main/AndroidManifest.xml").read_text())
 
     def test_unimplemented_target_cannot_build(self):
         for target in ("वेब", "डेस्कटॉप"):

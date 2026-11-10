@@ -16,10 +16,10 @@ class ScreenTests(unittest.TestCase):
     def test_generated_kotlin_calls_bhash_worker(self):
         screen = parse_layout(DEFAULT_LAYOUT)
         activity = generate_activity(screen)
-        self.assertIn('BhashRuntime.onWorker { BhashBindings.studio_action_0("दुनिया") }', activity)
+        self.assertIn('BhashRuntime.onWorker { BhashBindings.bhash_studio_action_0("दुनिया") }', activity)
         self.assertIn("rememberSaveable", activity)
         self.assertIn("throw cancelled", activity)
-        self.assertEqual(generate_exports(screen), "studio_action_0 = अभिवादन(पाठ) -> पाठ\n")
+        self.assertEqual(generate_exports(screen), "bhash_studio_action_0 = अभिवादन(पाठ) -> पाठ\n")
 
     def test_kotlin_strings_cannot_inject_code(self):
         self.assertEqual(kotlin_text('"\\$\n'), '"\\"\\\\\\$\\u000a"')
