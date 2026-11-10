@@ -25,6 +25,21 @@ python -m unittest discover -s tests -p test_integration.py -v
 
 `BHASH_STUDIO_TEST_OUTPUT` optionally names an existing writable output parent where the integration test keeps its source and build logs. Give each run a fresh parent. Core tests use fixtures to verify process argument boundaries and generation. They do not claim Android execution. The optional integration test invokes the real compiler and checks a real APK. An authorized emulator or phone is needed separately for install and button behavior.
 
+## Emulator instrumentation
+
+Every new Android export includes `StudioScreenTest` for its authored title and first button. It replaces the upstream starter's greeting tests, which reference a different Bhash export. Action tests require fixture expectations supplied as Base64 UTF-8 instrumentation arguments. Without those expectations the action-specific tests are skipped, while the title test still runs. The native runtime uses forced GC in the test runner.
+
+For the unchanged greeting fixture, start an Android API 29 or later emulator and point the opt-in Python wrapper at a studio-generated Android output directory. The wrapper refreshes the generated device tests, builds the app and instrumentation APKs, and installs them through ADB. It runs the three tests with Android's `am instrument` command, rejects skipped or incomplete cases, writes a JUnit-compatible result, and verifies a cold launch through the same Bhash Android CLI used by the studio. This execution path does not require Gradle's additional Unified Test Platform host plugins.
+
+```powershell
+$env:BHASH_STUDIO_DEVICE_TESTS = '1'
+$env:BHASH_STUDIO_DEVICE = 'emulator-5554'
+$env:BHASH_STUDIO_ANDROID_OUTPUT = 'C:\builds\JOB\android'
+python -m unittest discover -s tests -p test_device.py -v
+```
+
+Use the Java and Android environment configuration above. `ANDROID_SERIAL` is set for this test subprocess only. This wrapper is restricted to emulator serials and expects the default `अभिवादन` fixture, including `नमस्ते, दुनिया!`. It checks screen text, tapping the Bhash handler, landscape and portrait transitions, activity recreation, repeated actions, and 40 native calls with nukta, conjuncts and emoji. For other applications, supply expectations appropriate to their handlers through Gradle instrumentation arguments.
+
 ## Manual acceptance
 
 1. Launch the app and create a project using a Hindi display name and a path containing spaces and Hindi characters.

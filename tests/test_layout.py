@@ -1,6 +1,6 @@
 import unittest
 
-from bhash_studio.android import generate_activity, generate_exports, kotlin_text
+from bhash_studio.android import generate_activity, generate_exports, generate_device_tests, kotlin_text
 from bhash_studio.errors import StudioError
 from bhash_studio.layout import handlers, parse_layout, validate_handlers
 from bhash_studio.project import DEFAULT_LAYOUT, DEFAULT_SOURCE
@@ -29,6 +29,21 @@ class ScreenTests(unittest.TestCase):
     def test_missing_handler_is_actionable(self):
         with self.assertRaises(StudioError):
             validate_handlers(parse_layout(DEFAULT_LAYOUT), "फलन दूसरा() {}")
+
+    def test_device_tests_match_generated_screen_and_binding(self):
+        tests = generate_device_tests(parse_layout(DEFAULT_LAYOUT))
+        self.assertIn("StudioScreenTest", tests)
+        self.assertIn("SCREEN_ORIENTATION_LANDSCAPE", tests)
+        self.assertIn("scenario.recreate()", tests)
+        self.assertIn("startWithForcedGc()", tests)
+        self.assertIn("BhashBindings.bhash_studio_action_0(value)", tests)
+        self.assertNotIn("bhash_greeting", tests)
+
+    def test_static_screen_tests_do_not_reference_a_missing_action(self):
+        screen = parse_layout('<पर्दा पहचान="मुख्य" शीर्षक="शीर्षक"><स्तंभ><पाठ>केवल पाठ</पाठ></स्तंभ></पर्दा>')
+        tests = generate_device_tests(screen)
+        self.assertIn('awaitText("शीर्षक")', tests)
+        self.assertNotIn("bhash_studio_action_0", tests)
 
     def test_invalid_layouts_are_rejected(self):
         for source in ("<bad/>", DEFAULT_LAYOUT.replace("<पाठ>", "<गलत>"),

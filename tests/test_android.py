@@ -54,6 +54,9 @@ class AndroidTests(unittest.TestCase):
         self.assertEqual((output / "src" / SOURCE).read_text(encoding="utf-8"), original[SOURCE])
         self.assertFalse((output / "src/greeting.bhash").exists())
         self.assertIn("अभिवादन", (output / "bhash.exports").read_text(encoding="utf-8"))
+        device_tests = (output / "app/src/androidTest/java/org/bhashitva/androidstarter/StarterTest.kt").read_text(encoding="utf-8")
+        self.assertIn("StudioScreenTest", device_tests)
+        self.assertNotIn("bhash_greeting", device_tests)
         self.assertEqual(json.loads((output.parent / "build-inputs.json").read_text())["schema"], 1)
 
     def test_repeated_export_has_isolated_output(self):
