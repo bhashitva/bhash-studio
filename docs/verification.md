@@ -20,7 +20,7 @@ The restricted verification session required a writable copy of the Gradle depen
 
 ## Android emulator runtime checks
 
-The locally running Pixel emulator used Android 10 API 29 and the x86-64 ABI. Its system locale was en-US. The studio-generated app installed successfully and displayed its Hindi title and labels. A manual tap of अभिवादन करें in Android Studio's emulator view displayed नमस्ते, दुनिया!, exercising the normal Bhash runtime startup path.
+The locally running Pixel emulator used Android 10 API 29 and the x86-64 ABI. Its system locale was en-US. The studio-generated app installed successfully and displayed its Hindi title and labels. A manual tap of ??????? ???? in Android Studio's emulator view displayed ??????, ??????!, exercising the normal Bhash runtime startup path.
 
 All three generated Android instrumentation tests passed in approximately 30 seconds, with zero failures or skipped cases.
 
@@ -35,3 +35,7 @@ The generator now replaces the upstream starter's original greeting tests with t
 After instrumentation, the wrapper force-stopped the test application and used the studio's existing Bhash Android run command to rebuild as needed, install and launch it on emulator-5554. The cold-launch workflow passed and the application process remained running. The complete emulator wrapper and parser checks passed in approximately 197 seconds.
 
 Physical ARM64 device execution, full keyboard IME composition, screen-reader access and the wider Hindi-only acceptance journey require further verification.
+
+## Public GitHub CI
+
+The repository is public. [CI run 42926383695](https://github.com/bhashitva/bhash-studio/actions/runs/42926383695) passed for commit 8332ec1 on 2026-11-10. All six core jobs (Python 3.11 and 3.12 on Windows, Ubuntu and macOS), the package job, Android API 29 and API 36 jobs, and the aggregate CI checks gate succeeded. Both Android jobs built real APKs, passed all three instrumentation cases without skips, and passed the cold-launch CLI workflow. APKs, device results, diagnostic logs and the wheel are available as run artifacts for 14 days.

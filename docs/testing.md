@@ -38,13 +38,13 @@ $env:BHASH_STUDIO_ANDROID_OUTPUT = 'C:\builds\JOB\android'
 python -m unittest discover -s tests -p test_device.py -v
 ```
 
-Use the Java and Android environment configuration above. `ANDROID_SERIAL` is set for this test subprocess only. This wrapper is restricted to emulator serials and expects the default `अभिवादन` fixture, including `नमस्ते, दुनिया!`. It checks screen text, tapping the Bhash handler, landscape and portrait transitions, activity recreation, repeated actions, and 40 native calls with nukta, conjuncts and emoji. For other applications, supply expectations appropriate to their handlers through Gradle instrumentation arguments.
+Use the Java and Android environment configuration above. `ANDROID_SERIAL` is set for this test subprocess only. This wrapper is restricted to emulator serials and expects the default `???????` fixture, including `??????, ??????!`. It checks screen text, tapping the Bhash handler, landscape and portrait transitions, activity recreation, repeated actions, and 40 native calls with nukta, conjuncts and emoji. For other applications, supply expectations appropriate to their handlers through Gradle instrumentation arguments.
 
 ## Manual acceptance
 
 1. Launch the app and create a project using a Hindi display name and a path containing spaces and Hindi characters.
-2. Change the label in पर्दा.भाषदृश्य and the greeting returned by मुख्य.bhash. Check, save and reopen.
-3. Confirm सत्य and असत्य remain booleans and रिक्त remains null. Introduce a malformed value and confirm a Hindi message with source position.
+2. Change the label in ?????.???????? and the greeting returned by ?????.bhash. Check, save and reopen.
+3. Confirm ???? and ????? remain booleans and ????? remains null. Introduce a malformed value and confirm a Hindi message with source position.
 4. Build an APK, run it on an API 29 or later emulator and tap the generated button. Verify the result came from the Bhash function. Rotate and check result text restoration.
 5. Change the source after one build and build again. Confirm isolated output and preserved app identity.
 6. Trigger an external file edit, missing tool, failed build and cancellation. Confirm recoverable state and Hindi action messages.
@@ -56,6 +56,6 @@ The CI workflow runs on pushes, pull requests and manual dispatches. It covers P
 
 Android jobs download Bhash 0.25.0 and verify its fixed SHA-256 before execution. Java 21, Android platform 36, Build Tools 35.0.0 and NDK 28.2.13676358 build the real application for ARM64 and x86-64. Hardware-accelerated x86-64 emulators on API 29 and API 36 run the instrumentation and cold-launch wrapper. Android checks run automatically in GitHub and remain opt-in when running tests locally.
 
-Actions are pinned to commit SHAs. Workflow credentials have read-only repository access and checkout does not persist them. Pull-request runs use read-only Gradle caches. APKs, test results, logs and the Python wheel are retained as downloadable workflow artifacts for 14 days. The stable `CI checks` job succeeds only when every core, package and Android matrix job succeeds, making it suitable as the required branch check.
+Actions are pinned to commit SHAs. Workflow credentials have read-only repository access and checkout does not persist them. Gradle caching is disabled because Android projects are generated during the job. APKs, test results, logs and the Python wheel are retained as downloadable workflow artifacts for 14 days. The stable `CI checks` job succeeds only when every core, package and Android matrix job succeeds, making it suitable as the required branch check.
 
 See [the prototype verification record](verification.md) for completed checks and their limits. Restricted build accounts may need writable Gradle and Android user directories and a workspace-local debug signing configuration. Keep any generated debug key out of Git. An existing full Android installation normally supplies its own debug signing setup.
