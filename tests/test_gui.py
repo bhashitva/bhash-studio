@@ -9,6 +9,50 @@ from bhash_studio.project import CONFIG, FILES, SOURCE, LAYOUT, LocalPath, Proje
 
 @unittest.skipUnless(os.environ.get("BHASH_STUDIO_GUI_TESTS") == "1", "Enable GUI tests on a desktop session")
 class DesktopTests(unittest.TestCase):
+    def test_last_project_restores_tabs_and_skips_missing_paths(self):
+        import tkinter as tk
+        from bhash_studio.app import Studio
+
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            prefs = base / "settings.json"
+            project = Project.create(base / "मेरा-ऐप", "परीक्षण ऐप")
+            notes = project.root / "टिप्पणी.txt"
+            notes.write_text("नमस्ते", encoding="utf-8")
+            root = tk.Tk()
+            try:
+                studio = Studio(root, project, settings_file=prefs)
+                studio.select_file(notes.name)
+                studio.select_file(LAYOUT)
+                studio.select_file(notes.name)
+                root.update_idletasks()
+                studio.close()
+            finally:
+                root.destroy()
+
+            for expected, active, warnings in (
+                ([SOURCE, notes.name, LAYOUT], notes.name, []),
+                ([LAYOUT], LAYOUT, [notes.name, SOURCE]),
+                ([], None, ["पिछली परियोजना का फ़ोल्डर नहीं मिला"]),
+            ):
+                root = tk.Tk()
+                try:
+                    studio = Studio(root, settings_file=prefs)
+                    studio.restore_session()
+                    root.update_idletasks()
+                    self.assertEqual(list(studio.editors), expected)
+                    self.assertEqual(studio.active, active)
+                    for warning in warnings:
+                        self.assertIn(warning, studio.output.get("1.0", "end"))
+                    self.assertEqual(studio.project is not None, bool(expected))
+                finally:
+                    root.destroy()
+                if not warnings:
+                    notes.unlink()
+                    (project.root / SOURCE).unlink()
+                elif expected:
+                    project.root.rename(base / "स्थानांतरित")
+
     def test_tool_settings_are_restored_on_next_launch(self):
         import tkinter as tk
         from bhash_studio.android import Toolchain

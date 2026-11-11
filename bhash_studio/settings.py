@@ -44,3 +44,29 @@ def save_settings(path, tools, device):
         atomic_write(path, json.dumps({**asdict(tools), "device": device}, ensure_ascii=False, indent=2) + "\n")
     except OSError as error:
         raise StudioError(f"औज़ार सेटिंग सहेजी नहीं जा सकी — {path}") from error
+
+
+def load_session(path):
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as error:
+        raise StudioError("पिछली परियोजना की जानकारी नहीं पढ़ी जा सकी।") from error
+    if not isinstance(saved, dict):
+        raise StudioError("पिछली परियोजना की जानकारी का रूप गलत है।")
+    project, tabs, active = saved.get("project"), saved.get("tabs"), saved.get("active")
+    if (not isinstance(project, str) or not Path(project).is_absolute()
+            or not isinstance(tabs, list) or any(not isinstance(name, str) or not name for name in tabs)
+            or (active is not None and not isinstance(active, str))):
+        raise StudioError("पिछली परियोजना की जानकारी का रूप गलत है।")
+    return project, tabs, active
+
+
+def save_session(path, project, tabs, active):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        saved = {"project": str(project), "tabs": list(tabs), "active": active}
+        atomic_write(path, json.dumps(saved, ensure_ascii=False, indent=2) + "\n")
+    except OSError as error:
+        raise StudioError(f"पिछली परियोजना और उसके टैब सहेजे नहीं जा सके — {path}") from error

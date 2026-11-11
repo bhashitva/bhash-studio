@@ -15,9 +15,9 @@ from .config import loads
 from .editor import BhashEditor
 from .errors import StudioError
 from .path_picker import choose_path, jar_file, java_program
-from .project import CONFIG, FILES, SOURCE, Project, digest
+from .project import CONFIG, FILES, SOURCE, LocalPath, Project, digest
 from .project_tree import ProjectTree
-from .settings import load_settings, save_settings, settings_path
+from .settings import load_session, load_settings, save_session, save_settings, settings_path
 from .targets import validate_snapshot
 
 
@@ -99,6 +99,7 @@ class Studio:
         self.tools = tools or Toolchain.discover()
         self.device = ""
         self.settings_file = settings_file if settings_file is not None else settings_path()
+        self.session_file = self.settings_file.with_name("session.json")
         settings_error = None
         try:
             self.tools, self.device = load_settings(self.settings_file, self.tools)
@@ -246,7 +247,7 @@ class Studio:
             elif key in {"save", "close_tab"}:
                 enabled = self.active is not None and not busy
             elif key in {"check", "export", "build", "run"}:
-                enabled = self.project is not None and not busy
+                enabled = all(name in self.buffers for name in FILES) and not busy
             else:
                 enabled = not busy or key == "exit"
             menu.entryconfigure(index, state="normal" if enabled else "disabled")
@@ -318,7 +319,12 @@ class Studio:
         return dialog.result is not None and dialog.result["answer"] == "छोड़ें"
 
     def load(self, project):
-        snapshot = project.snapshot()
+        self.show_project(project, project.snapshot())
+        self.select_file(SOURCE)
+        self.log("परियोजना खोल दी गई।")
+        self.guard(self.refresh_preview)
+
+    def show_project(self, project, snapshot):
         for editor in self.editors.values():
             editor.master.destroy()
         self.editors.clear()
@@ -327,14 +333,51 @@ class Studio:
         self.hashes = {name: digest(text) for name, text in snapshot.items()}
         self.update_project_title()
         self.guard(lambda: self.explorer.set_project(project))
-        self.select_file(SOURCE)
-        self.log("परियोजना खोल दी गई।")
-        self.guard(self.refresh_preview)
+        self.tab_changed()
+
+    def restore_session(self):
+        try:
+            session = load_session(self.session_file)
+            if session is None:
+                return
+            path, tabs, active = session
+            folder = LocalPath(path).resolve()
+            if not folder.is_dir():
+                self.log(f"पिछली परियोजना का फ़ोल्डर नहीं मिला — {path}")
+                return
+        except (StudioError, OSError, ValueError, RuntimeError) as error:
+            message = str(error) if isinstance(error, StudioError) else "पिछली परियोजना का फ़ोल्डर नहीं खोला जा सका।"
+            self.log(message)
+            return
+
+        project = Project(folder)
+        snapshot = {}
+        missing = set()
+        for filename in FILES:
+            try:
+                snapshot[filename] = project.read(filename)
+            except (StudioError, OSError):
+                missing.add(filename)
+                self.log(f"पिछली परियोजना की आवश्यक फ़ाइल नहीं खुली — {filename}")
+        self.show_project(project, snapshot)
+        for filename in tabs:
+            if filename in missing:
+                continue
+            try:
+                self.select_file(filename)
+            except (StudioError, OSError, ValueError, RuntimeError):
+                self.log(f"पहले खुली फ़ाइल अब नहीं खोली जा सकी — {filename}")
+        selected = active if active in self.editors else next(iter(self.editors), None)
+        if selected is not None:
+            self.select_file(selected)
+        self.log("पिछली परियोजना फिर खोल दी गई।")
+        if not missing:
+            self.guard(self.refresh_preview)
 
     def update_project_title(self):
         name = self.project.root.name
         try:
-            config = loads(self.buffers[CONFIG])
+            config = loads(self.buffers.get(CONFIG, ""))
             if isinstance(config, dict) and isinstance(config.get("नाम"), str):
                 name = config["नाम"].strip() or name
         except StudioError:
@@ -499,6 +542,8 @@ class Studio:
     def close(self):
         if not self.confirm_leave():
             return
+        if self.project is not None:
+            self.guard(lambda: save_session(self.session_file, self.project.root, self.editors, self.active))
         self.closing = True
         self.cancel.set()
 
@@ -512,4 +557,6 @@ def main():
     studio = Studio(root, compiler_override=options.compiler)
     if options.project:
         studio.guard(lambda: studio.load(Project.open(options.project)))
+    else:
+        studio.restore_session()
     root.mainloop()
