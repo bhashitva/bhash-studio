@@ -10,10 +10,12 @@ from tkinter import ttk
 
 from .android import AndroidTarget, Toolchain
 from .bhash_syntax import COMMON_KEYWORDS, CONSTRUCTS
+from .config import loads
 from .editor import BhashEditor
 from .errors import StudioError
 from .path_picker import choose_path, jar_file, java_program
 from .project import CONFIG, FILES, SOURCE, Project, digest
+from .project_tree import ProjectTree
 from .targets import validate_snapshot
 
 
@@ -28,7 +30,7 @@ HELP = '''भाष यंत्र में आपका स्वागत �
 
 सहेजें से खुली फ़ाइल सहेजें। फ़ाइल बदलने पर आपकी अधूरी लिखावट बनी रहती है। जाँचें और निर्माण के समय सभी फ़ाइलें सहेजी जाती हैं। बाहर बदली गई फ़ाइल मिलने पर अपनी लिखावट की प्रति बनाकर परियोजना फिर खोलें।
 
-फ़ाइल → फ़ाइल बदलें से लिखने वाली फ़ाइल चुनें। मुख्य.bhash में शब्द डालें और रचना डालें से लिखावट जोड़ें। भाष के आरक्षित शब्द बैंगनी रंग में दिखाई देते हैं। लिखते समय नीचे और ऊपर के तीर से सुझाव चुनें। टैब या एंटर से उसे डालें और एस्केप से सूची बंद करें।
+बाईं ओर परियोजना की फ़ाइलें दिखती हैं। फ़ोल्डर खोलें और पाठ फ़ाइल पर दो बार क्लिक करें। हर खुली फ़ाइल का अपना टैब है। फ़ाइल मेनू से चुना हुआ टैब बंद करें। भाष फ़ाइल में शब्द डालें और रचना डालें से लिखावट जोड़ें। भाष के आरक्षित शब्द बैंगनी रंग में दिखाई देते हैं। लिखते समय नीचे और ऊपर के तीर से सुझाव चुनें। टैब या एंटर से उसे डालें और एस्केप से सूची बंद करें।
 
 पूर्वावलोकन केवल दृश्य की बनावट दिखाता है। बटन का भाष फलन उपकरण पर चलता है। पूरी भाष जाँच निर्माण के समय कंपाइलर करता है।
 
@@ -90,7 +92,8 @@ class Studio:
         self.project = None
         self.buffers = {}
         self.hashes = {}
-        self.active = SOURCE
+        self.active = None
+        self.editors = {}
         self.tools = tools or Toolchain.discover()
         self.device = ""
         self.messages = queue.Queue()
@@ -107,40 +110,56 @@ class Studio:
         self.create_menu_bar()
         panes = ttk.Panedwindow(root, orient="horizontal")
         panes.pack(fill="both", expand=True, padx=14)
+        self.explorer = ProjectTree(panes, self.select_file, self.guard)
+        self.explorer.configure(width=240)
+        panes.add(self.explorer, weight=0)
         left = ttk.Frame(panes)
         right = ttk.Frame(panes)
         panes.add(left, weight=3)
         panes.add(right, weight=2)
         helpers = ttk.Frame(left)
         helpers.pack(fill="x", pady=(6, 0))
-        editor_frame = ttk.Frame(left)
-        editor_frame.pack(fill="both", expand=True, pady=6)
-        self.editor = BhashEditor(editor_frame, undo=True, wrap="none", font=("Nirmala UI", 13),
-                                  padx=12, pady=12, background="#f7f9fc", foreground="#182d43", insertwidth=2)
+        self.notebook = ttk.Notebook(left)
+        self.notebook.pack(fill="both", expand=True, pady=6)
+        self.notebook.enable_traversal()
+        self.notebook.bind("<<NotebookTabChanged>>", self.tab_changed)
         self.helpers = [
             self.insertion_menu(helpers, "शब्द डालें", ((word, (word, "")) for word in COMMON_KEYWORDS)),
             self.insertion_menu(helpers, "रचना डालें", CONSTRUCTS.items()),
         ]
-        scroll = ttk.Scrollbar(editor_frame, orient="vertical", command=self.editor.yview)
-        horizontal = ttk.Scrollbar(editor_frame, orient="horizontal", command=self.editor.xview)
-        self.editor.configure(yscrollcommand=scroll.set, xscrollcommand=horizontal.set)
-        editor_frame.rowconfigure(0, weight=1)
-        editor_frame.columnconfigure(0, weight=1)
-        self.editor.grid(row=0, column=0, sticky="nsew")
-        scroll.grid(row=0, column=1, sticky="ns")
-        horizontal.grid(row=1, column=0, sticky="ew")
         self.preview = tk.Frame(right, background="#ffffff", padx=20, pady=20)
         self.preview.pack(fill="both", expand=True, padx=(12, 0), pady=6)
         ttk.Label(root, text="कार्य विवरण").pack(anchor="w", padx=18)
         self.output = tk.Text(root, height=5, state="disabled", wrap="word", font=("Nirmala UI", 11), padx=10)
         self.output.pack(fill="x", padx=14, pady=(4, 10))
-        self.editor.bind("<Control-a>", self.select_all)
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.log("नई परियोजना बनाएँ या पहले से बनी परियोजना खोलें।")
         if project:
             self.load(project)
         self.poll_timer = root.after(100, self.poll)
         root.bind("<Destroy>", self.stop_polling)
+
+    @property
+    def editor(self):
+        return self.editors.get(self.active)
+
+    def open_tab(self, filename):
+        frame = ttk.Frame(self.notebook)
+        editor = BhashEditor(frame, undo=True, wrap="none", font=("Nirmala UI", 13),
+                             padx=12, pady=12, background="#f7f9fc", foreground="#182d43", insertwidth=2)
+        vertical = ttk.Scrollbar(frame, orient="vertical", command=editor.yview)
+        horizontal = ttk.Scrollbar(frame, orient="horizontal", command=editor.xview)
+        editor.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        editor.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+        editor.bind("<Control-a>", self.select_all)
+        editor.open_buffer(self.buffers[filename], Path(filename).suffix == ".bhash")
+        self.editors[filename] = editor
+        self.notebook.add(frame, text=filename)
+        return editor
 
     def insertion_menu(self, parent, label, entries):
         button = ttk.Menubutton(parent, text=label, state="disabled")
@@ -179,6 +198,7 @@ class Studio:
         add(file_menu, "open", "परियोजना खोलें…", self.open_project, f"<{modifier}-o>", accelerator + "O")
         file_menu.add_separator()
         add(file_menu, "save", "वर्तमान फ़ाइल सहेजें", self.save_current, f"<{modifier}-s>", accelerator + "S")
+        add(file_menu, "close_tab", "वर्तमान फ़ाइल बंद करें", self.close_tab, f"<{modifier}-w>", accelerator + "W")
         self.selected_file = tk.StringVar(self.root)
         file_picker = tk.Menu(file_menu, tearoff=False)
         for filename in FILES:
@@ -212,7 +232,9 @@ class Studio:
                 enabled = busy
             elif key == "files":
                 enabled = self.project is not None
-            elif key in {"save", "check", "export", "build", "run"}:
+            elif key in {"save", "close_tab"}:
+                enabled = self.active is not None and not busy
+            elif key in {"check", "export", "build", "run"}:
                 enabled = self.project is not None and not busy
             else:
                 enabled = not busy or key == "exit"
@@ -236,43 +258,77 @@ class Studio:
         self.editor.tag_add("sel", "1.0", "end-1c")
         return "break"
 
-    def remember(self):
-        if self.project:
-            self.buffers[self.active] = self.editor.get("1.0", "end-1c")
+    def file_text(self, filename):
+        editor = self.editors.get(filename)
+        return editor.get("1.0", "end-1c") if editor is not None else self.buffers[filename]
 
     def select_file(self, filename):
-        if not self.project or filename == self.active:
+        if not self.project:
             return
-        self.remember()
-        self.active = filename
-        self.show_active_file()
+        editor = self.editors.get(filename)
+        if editor is None:
+            if filename not in self.buffers:
+                text = self.project.read(filename)
+                self.buffers[filename] = text
+                self.hashes[filename] = digest(text)
+            editor = self.open_tab(filename)
+        self.notebook.select(editor.master)
+        self.tab_changed()
+        editor.focus_set()
 
-    def show_active_file(self):
-        self.selected_file.set(self.active)
-        self.root.title(f"{APP_NAME} — {self.active}")
-        source_mode = self.active == SOURCE
-        self.editor.open_buffer(self.buffers[self.active], source_mode)
+    def tab_changed(self, _event=None):
+        page = self.notebook.select()
+        self.active = next((name for name, editor in self.editors.items() if str(editor.master) == page), None)
+        self.selected_file.set(self.active or "")
         for helper in self.helpers:
-            helper.configure(state="normal" if source_mode else "disabled")
+            helper.configure(state="normal" if self.editor and self.editor.source_mode else "disabled")
+        self.update_menu_state()
+
+    def close_tab(self):
+        filename = self.active
+        if filename is None or (self.file_text(filename) != self.buffers[filename] and not self.confirm_discard()):
+            return
+        page = self.editors.pop(filename).master
+        self.notebook.forget(page)
+        page.destroy()
+        if filename not in FILES:
+            self.buffers.pop(filename)
+            self.hashes.pop(filename)
+        self.tab_changed()
 
     def confirm_leave(self):
-        self.remember()
-        if not self.project or all(digest(text) == self.hashes[name] for name, text in self.buffers.items()):
+        if all(self.file_text(name) == self.buffers[name] for name in self.editors):
             return True
+        return self.confirm_discard()
+
+    def confirm_discard(self):
         dialog = Form(self.root, "अधूरी लिखावट", [("answer", "लिखावट छोड़ने के लिए ‘छोड़ें’ लिखें", "")], "आगे बढ़ें")
         self.root.wait_window(dialog)
         return dialog.result is not None and dialog.result["answer"] == "छोड़ें"
 
     def load(self, project):
         snapshot = project.snapshot()
+        for editor in self.editors.values():
+            editor.master.destroy()
+        self.editors.clear()
         self.project = project
-        self.update_menu_state()
         self.buffers = snapshot
         self.hashes = {name: digest(text) for name, text in snapshot.items()}
-        self.active = SOURCE
-        self.show_active_file()
+        self.update_project_title()
+        self.guard(lambda: self.explorer.set_project(project))
+        self.select_file(SOURCE)
         self.log("परियोजना खोल दी गई।")
         self.guard(self.refresh_preview)
+
+    def update_project_title(self):
+        name = self.project.root.name
+        try:
+            config = loads(self.buffers[CONFIG])
+            if isinstance(config, dict) and isinstance(config.get("नाम"), str):
+                name = config["नाम"].strip() or name
+        except StudioError:
+            pass
+        self.root.title(f"{APP_NAME} — {name}")
 
     def new_project(self):
         if not self.confirm_leave():
@@ -296,22 +352,29 @@ class Studio:
             self.load(Project.open(path))
 
     def save_current(self):
-        if not self.project:
-            raise StudioError("पहले एक परियोजना खोलें।")
-        self.remember()
-        self.hashes[self.active] = self.project.save(self.active, self.buffers[self.active], self.hashes[self.active])
+        if self.active is None:
+            raise StudioError("पहले परियोजना की कोई फ़ाइल खोलें।")
+        self.save_file(self.active)
         self.log("फ़ाइल सहेज दी गई।")
+
+    def save_file(self, filename):
+        text = self.file_text(filename)
+        self.hashes[filename] = self.project.save(filename, text, self.hashes[filename])
+        self.buffers[filename] = text
+        if filename == CONFIG:
+            self.update_project_title()
 
     def save_all(self):
         if not self.project:
             raise StudioError("पहले एक परियोजना खोलें।")
-        self.remember()
-        for name, text in self.buffers.items():
-            self.hashes[name] = self.project.save(name, text, self.hashes[name])
+        for name in FILES:
+            self.save_file(name)
+        for name in self.editors:
+            if name not in FILES and self.file_text(name) != self.buffers[name]:
+                self.save_file(name)
 
     def refresh_preview(self):
-        self.remember()
-        _, screen = validate_snapshot(self.buffers)
+        _, screen = validate_snapshot({name: self.file_text(name) for name in FILES})
         for widget in self.preview.winfo_children():
             widget.destroy()
         tk.Label(self.preview, text=screen.title, font=("Nirmala UI", 18, "bold"), bg="white", wraplength=350).pack(anchor="w", pady=(0, 18))
@@ -378,7 +441,7 @@ class Studio:
         if self.worker is not None:
             raise StudioError("पहला कार्य पूरा होने दें या उसे रोकें।")
         self.validate()
-        snapshot = self.buffers.copy()
+        snapshot = {name: self.buffers[name] for name in FILES}
         project = self.project
         tools = self.tools
         device = self.device

@@ -66,6 +66,49 @@ class DesktopTests(unittest.TestCase):
             finally:
                 root.destroy()
 
+    def test_explorer_opens_nested_files_in_independent_tabs(self):
+        import tkinter as tk
+        from bhash_studio.app import Studio
+
+        with tempfile.TemporaryDirectory() as temp:
+            project = Project.create(Path(temp) / "मेरा-ऐप", "परीक्षण ऐप")
+            folder = project.root / "सामग्री"
+            folder.mkdir()
+            extra = folder / "टिप्पणी.txt"
+            extra.write_text("पहली लिखावट", encoding="utf-8")
+            root = tk.Tk()
+            try:
+                app = Studio(root, project)
+                root.update()
+                source_editor = app.editor
+                source_editor.insert("end", "\n// अधूरी लिखावट")
+                explorer = app.explorer
+                directory = next(i for i, value in explorer.entries.items() if value == ("सामग्री", True))
+                explorer.tree.focus(directory)
+                explorer.tree.event_generate("<<TreeviewOpen>>")
+                item = explorer.tree.get_children(directory)[0]
+                explorer.tree.focus(item)
+                explorer.tree.focus_force()
+                root.update()
+                explorer.tree.event_generate("<Return>")
+                self.assertEqual(app.active, "सामग्री/टिप्पणी.txt")
+                self.assertEqual(app.editor.get("1.0", "end-1c"), "पहली लिखावट")
+                self.assertEqual(len(app.notebook.tabs()), 2)
+                self.assertIn("परीक्षण ऐप", root.title())
+                app.editor.insert("end", " नई")
+                app.notebook.select(source_editor.master)
+                root.update()
+                self.assertIs(app.editor, source_editor)
+                self.assertIn("अधूरी लिखावट", app.editor.get("1.0", "end"))
+                app.select_file("सामग्री/टिप्पणी.txt")
+                self.assertEqual(len(app.notebook.tabs()), 2)
+                app.save_current()
+                app.close_tab()
+                self.assertEqual(extra.read_text(encoding="utf-8"), "पहली लिखावट नई")
+                self.assertIs(app.editor, source_editor)
+            finally:
+                root.destroy()
+
     def test_toolchain_picker_filters_files_by_field(self):
         import tkinter as tk
         from bhash_studio.path_picker import PathPicker, jar_file, java_program

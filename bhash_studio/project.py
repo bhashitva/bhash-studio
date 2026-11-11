@@ -101,10 +101,14 @@ class Project:
         return project
 
     def file(self, filename):
-        if filename not in FILES:
-            raise StudioError("इस परियोजना फ़ाइल को खोलने की अनुमति नहीं है।")
-        file = self.root / filename
-        if file.is_symlink() or file.resolve().parent != self.root:
+        relative = Path(filename)
+        if not relative.parts or relative.anchor or ".." in relative.parts:
+            raise StudioError("परियोजना फ़ाइल का मार्ग उसके फ़ोल्डर के अंदर होना चाहिए।")
+        file = self.root / relative
+        if not file.resolve().is_relative_to(self.root) or any(
+            (self.root / Path(*relative.parts[:end])).is_symlink()
+            for end in range(1, len(relative.parts) + 1)
+        ):
             raise StudioError("परियोजना फ़ाइल का मार्ग उसके फ़ोल्डर के अंदर होना चाहिए।")
         return file
 
@@ -115,9 +119,12 @@ class Project:
         if file.stat().st_size > MAX_SOURCE * 4:
             raise StudioError("परियोजना फ़ाइल का आकार बहुत बड़ा है।")
         try:
-            return file.read_text(encoding="utf-8")
+            text = file.read_text(encoding="utf-8")
         except UnicodeError as error:
             raise StudioError("फ़ाइल को यूनिकोड के यूटीएफ 8 रूप में सहेजें।") from error
+        if "\0" in text or len(text) > MAX_SOURCE:
+            raise StudioError("यह फ़ाइल संपादन योग्य पाठ नहीं है या इसका आकार बहुत बड़ा है।")
+        return text
 
     def save(self, filename, text, expected):
         if len(text) > MAX_SOURCE:
