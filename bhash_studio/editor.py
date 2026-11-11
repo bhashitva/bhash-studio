@@ -2,19 +2,27 @@
 
 from bisect import bisect_right
 import re
+import subprocess
 import tkinter as tk
 
 from .bhash_syntax import analyze
+from .errors import StudioError
 
 
 class BhashEditor(tk.Text):
-    def __init__(self, parent, **options):
+    def __init__(self, parent, syntax_check=None, **options):
         super().__init__(parent, exportselection=False, **options)
         self.source_mode = False
         self.pending = None
         self.suggest_after_edit = False
         self.completion = None
+        self.syntax_check = syntax_check
+        self.syntax_status = tk.StringVar(self)
+        self.syntax_timer = None
+        self.syntax_future = None
         self.tag_configure("keyword", foreground="#663399")
+        self.tag_configure("syntax_error", foreground="#a4252c", underline=True)
+        self.tag_raise("sel")
         self.choices = tk.Listbox(
             self, font=self.cget("font"), width=25, takefocus=False,
             exportselection=False, background="#ffffff", foreground="#182d43",
@@ -31,6 +39,7 @@ class BhashEditor(tk.Text):
                          "<Home>", "<End>", "<Prior>", "<Next>", "<MouseWheel>", "<Button-4>", "<Button-5>"):
             self.bind(sequence, self.dismiss)
         self.bind("<Destroy>", self.cancel_refresh)
+        self.bind("<Destroy>", self.cancel_syntax, add=True)
 
     def open_buffer(self, text, source_mode):
         self.dismiss()
@@ -40,6 +49,7 @@ class BhashEditor(tk.Text):
         self.edit_reset()
         self.edit_modified(False)
         self.refresh()
+        self.schedule_syntax()
 
     def edited(self, _event):
         if not self.edit_modified():
@@ -47,9 +57,56 @@ class BhashEditor(tk.Text):
         self.edit_modified(False)
         self.dismiss()
         if self.source_mode:
+            self.schedule_syntax()
             self.cancel_refresh()
             self.suggest_after_edit = True
             self.pending = self.after(120, self.refresh_after_edit)
+
+    def cancel_syntax(self, _event=None):
+        if self.syntax_timer is not None:
+            self.after_cancel(self.syntax_timer)
+            self.syntax_timer = None
+        if self.syntax_future is not None:
+            self.syntax_future.cancel()
+            self.syntax_future = None
+
+    def schedule_syntax(self):
+        self.cancel_syntax()
+        self.tag_remove("syntax_error", "1.0", "end")
+        self.syntax_status.set("")
+        if self.source_mode and self.syntax_check is not None:
+            self.syntax_timer = self.after(500, self.start_syntax)
+
+    def start_syntax(self):
+        self.syntax_timer = None
+        self.syntax_future = self.syntax_check(self.get("1.0", "end-1c"))
+        self.finish_syntax()
+
+    def finish_syntax(self):
+        self.syntax_timer = None
+        if not self.syntax_future.done():
+            self.syntax_timer = self.after(60, self.finish_syntax)
+            return
+        future, self.syntax_future = self.syntax_future, None
+        try:
+            diagnostics = future.result()
+        except StudioError as error:
+            self.syntax_status.set(str(error))
+            return
+        except (OSError, subprocess.TimeoutExpired):
+            self.syntax_status.set("वाक्यविन्यास जाँच पूरी नहीं हुई। जावा और कंपाइलर की सेटिंग जाँचें।")
+            return
+        if not diagnostics:
+            self.syntax_status.set("वाक्यविन्यास सही है।")
+            return
+        for line, column, _ in diagnostics:
+            prefix = self.get(f"{line}.0", f"{line}.end")[:column - 1]
+            start = f"{line}.{self.tk.call('string', 'length', prefix)}"
+            if self.compare(start, ">=", "end-1c"):
+                start = self.index("end-1c -1c")
+            self.tag_add("syntax_error", start, f"{start} +1c")
+        line, column, message = diagnostics[0]
+        self.syntax_status.set(f"{len(diagnostics)} त्रुटि — पंक्ति {line}, स्थान {column} — {message}")
 
     def cancel_refresh(self, _event=None):
         if self.pending is not None:
@@ -148,3 +205,4 @@ class BhashEditor(tk.Text):
         self.see("insert")
         self.edit_modified(False)
         self.refresh()
+        self.schedule_syntax()

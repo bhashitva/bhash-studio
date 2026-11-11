@@ -10,6 +10,33 @@ from bhash_studio.project import CONFIG, FILES, SOURCE, LAYOUT, LocalPath, Proje
 
 @unittest.skipUnless(os.environ.get("BHASH_STUDIO_GUI_TESTS") == "1", "Enable GUI tests on a desktop session")
 class DesktopTests(unittest.TestCase):
+    def test_editor_marks_syntax_errors_and_clears_them_after_correction(self):
+        from concurrent.futures import Future
+        import tkinter as tk
+        from bhash_studio.editor import BhashEditor
+
+        def check(source):
+            future = Future()
+            future.set_result(((1, 6, "नाम चाहिए"),) if "?" in source else ())
+            return future
+
+        root = tk.Tk()
+        try:
+            editor = BhashEditor(root, syntax_check=check)
+            editor.open_buffer("फलन  ?", source_mode=True)
+            editor.cancel_syntax()
+            editor.start_syntax()
+            self.assertTrue(editor.tag_ranges("keyword"))
+            self.assertEqual(tuple(map(str, editor.tag_ranges("syntax_error"))), ("1.5", "1.6"))
+            self.assertIn("नाम चाहिए", editor.syntax_status.get())
+            editor.open_buffer("फलन नाम() {}", source_mode=True)
+            editor.cancel_syntax()
+            editor.start_syntax()
+            self.assertFalse(editor.tag_ranges("syntax_error"))
+            self.assertEqual(editor.syntax_status.get(), "वाक्यविन्यास सही है।")
+        finally:
+            root.destroy()
+
     def test_explorer_indicator_and_multi_file_trash(self):
         import tkinter as tk
         from bhash_studio.app import Studio

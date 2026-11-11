@@ -1,6 +1,7 @@
-"""Small, dependency-free desktop prototype. All developer-facing text is Hindi."""
+"""Bhash Yantra's Hindi-first desktop interface."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 import queue
@@ -11,7 +12,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from .android import AndroidTarget, Toolchain
-from .bhash_syntax import COMMON_KEYWORDS, CONSTRUCTS
+from .bhash_syntax import COMMON_KEYWORDS, CONSTRUCTS, check_syntax
 from .config import loads
 from .editor import BhashEditor
 from .errors import StudioError
@@ -110,6 +111,7 @@ class Form(tk.Toplevel):
 class Studio:
     def __init__(self, root, project=None, tools=None, settings_file=None, compiler_override=None):
         self.root = root
+        self.syntax_pool = ThreadPoolExecutor(max_workers=1)
         enable_hindi_input(root)
         self.project = None
         self.buffers = {}
@@ -217,7 +219,8 @@ class Studio:
 
     def open_tab(self, filename):
         frame = ttk.Frame(self.notebook)
-        editor = BhashEditor(frame, undo=True, wrap="none", font=("Nirmala UI", 13),
+        source_mode = Path(filename).suffix == ".bhash"
+        editor = BhashEditor(frame, syntax_check=self.submit_syntax, undo=True, wrap="none", font=("Nirmala UI", 13),
                              padx=12, pady=12, background="#f7f9fc", foreground="#182d43", insertwidth=2)
         vertical = ttk.Scrollbar(frame, orient="vertical", command=editor.yview)
         horizontal = ttk.Scrollbar(frame, orient="horizontal", command=editor.xview)
@@ -227,9 +230,13 @@ class Studio:
         editor.grid(row=0, column=0, sticky="nsew")
         vertical.grid(row=0, column=1, sticky="ns")
         horizontal.grid(row=1, column=0, sticky="ew")
+        if source_mode:
+            status = ttk.Label(frame, textvariable=editor.syntax_status, width=1)
+            status.grid(row=2, column=0, sticky="ew")
+            editor.bind("<Configure>", lambda event: status.configure(wraplength=event.width))
         editor.bind("<Control-a>", self.select_all)
         state = self.file_states.get(filename, {})
-        editor.open_buffer(state.get("text", self.buffers[filename]), Path(filename).suffix == ".bhash")
+        editor.open_buffer(state.get("text", self.buffers[filename]), source_mode)
         cursor = state.get("cursor")
         if isinstance(cursor, str):
             editor.mark_set("insert", cursor)
@@ -238,6 +245,10 @@ class Studio:
         self.editors[filename] = editor
         self.notebook.add(frame, text=filename)
         return editor
+
+    def submit_syntax(self, source):
+        tools = replace(self.tools, compiler=self.compiler_override) if self.compiler_override else self.tools
+        return self.syntax_pool.submit(check_syntax, tools, source)
 
     def restore_view(self, editor, state):
         editor.unbind("<Map>")
@@ -602,8 +613,11 @@ class Studio:
             if name not in FILES and self.file_text(name) != self.buffers[name]:
                 self.save_file(name)
 
-    def refresh_preview(self):
-        _, screen = validate_snapshot({name: self.file_text(name) for name in FILES})
+    def refresh_preview(self, snapshot=None):
+        if snapshot is None:
+            snapshot = self.project.snapshot()
+            snapshot.update((name, self.file_text(name)) for name in self.editors if name in snapshot)
+        _, screen = validate_snapshot(snapshot)
         for widget in self.preview.winfo_children():
             widget.destroy()
         tk.Label(self.preview, text=screen.title, font=("Nirmala UI", 18, "bold"), bg="white", wraplength=350).pack(anchor="w", pady=(0, 18))
@@ -631,8 +645,10 @@ class Studio:
 
     def validate(self):
         self.save_all()
-        self.refresh_preview()
+        snapshot = self.project.snapshot()
+        self.refresh_preview(snapshot)
         self.log("विन्यास, दृश्य और बटन के फलन रूप की जाँच सफल। पूरी भाष जाँच निर्माण में होगी।")
+        return snapshot
 
     def settings(self):
         dialog = Form(self.root, "औज़ार सेटिंग", [("compiler", "आधिकारिक भाष कंपाइलर की जार फ़ाइल", self.tools.compiler),
@@ -647,6 +663,8 @@ class Studio:
             save_settings(self.settings_file, tools, values["device"])
             self.tools = tools
             self.device = values["device"]
+            for editor in self.editors.values():
+                editor.schedule_syntax()
             self.log("औज़ार सेटिंग सहेज दी गई। अगली बार भी यही सेटिंग उपयोग में आएगी।")
 
     def help(self):
@@ -670,8 +688,7 @@ class Studio:
     def start_job(self, operation):
         if self.worker is not None:
             raise StudioError("पहला कार्य पूरा होने दें या उसे रोकें।")
-        self.validate()
-        snapshot = {name: self.buffers[name] for name in FILES}
+        snapshot = self.validate()
         project = self.project
         tools = replace(self.tools, compiler=self.compiler_override) if self.compiler_override else self.tools
         device = self.device
@@ -713,6 +730,7 @@ class Studio:
     def stop_polling(self, event):
         if event.widget is self.root:
             self.root.after_cancel(self.poll_timer)
+            self.syntax_pool.shutdown(wait=False, cancel_futures=True)
 
     def close(self):
         if self.closing:

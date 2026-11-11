@@ -174,4 +174,17 @@ class Project:
         return digest(text)
 
     def snapshot(self):
-        return {filename: self.read(filename) for filename in FILES}
+        files = {filename: self.read(filename) for filename in FILES}
+        directories = [self.root]
+        while directories:
+            for path in sorted(directories.pop().iterdir()):
+                if path.is_symlink():
+                    continue
+                if path.is_dir():
+                    if not path.name.startswith(".") and path.name != BUILD_DIRECTORY and path.resolve() == path:
+                        directories.append(path)
+                elif path.suffix == ".bhash" and path.is_file():
+                    relative = path.relative_to(self.root).as_posix()
+                    if relative not in files:
+                        files[relative] = self.read(relative)
+        return files

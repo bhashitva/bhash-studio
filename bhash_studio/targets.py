@@ -20,9 +20,10 @@ TARGETS = (Target("एंड्रॉयड", True), Target("डेस्कट�
 def validate_snapshot(snapshot):
     config = validate_config(loads(snapshot[CONFIG]))
     screen = parse_layout(snapshot[LAYOUT])
-    if not snapshot[SOURCE].strip():
-        raise StudioError("मुख्य भाष फ़ाइल में कम से कम एक फलन लिखें।")
-    validate_handlers(screen, snapshot[SOURCE])
+    extra = [text for name, text in snapshot.items() if name != SOURCE and name.endswith(".bhash")]
+    if not any(text.strip() for text in (snapshot[SOURCE], *extra)):
+        raise StudioError("परियोजना की किसी भाष फ़ाइल में कोड लिखें।")
+    validate_handlers(screen, snapshot[SOURCE], *extra)
     return config, screen
 
 

@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 
 from .errors import StudioError
 from .layout import handlers, walk
-from .project import BUILD_DIRECTORY, CONFIG, LAYOUT, SOURCE, LocalPath as Path, atomic_write
+from .project import BUILD_DIRECTORY, CONFIG, LAYOUT, LocalPath as Path, atomic_write
 from .targets import require_android, validate_snapshot
 
 
@@ -424,13 +424,18 @@ class AndroidTarget:
         self.runner(self.command(["android", "init", str(output), "--id", config["ऐप_पहचान"], "--name", config["नाम"]]),
                     job, self.tools.environment(), log, cancel)
         source = output / "src"
-        for file in source.glob("*.bhash"):
+        for file in source.rglob("*.bhash"):
             file.unlink()
-        atomic_write(source / SOURCE, snapshot[SOURCE])
+        for name, text in snapshot.items():
+            if name.endswith(".bhash"):
+                self.stage_source(project, source, name, text)
         # A screen with no button still needs a valid export for the Android native starter.
         exports = generate_exports(screen)
         if not exports:
-            atomic_write(source / "studio.bhash", 'फलन भाष_दृश्य(मान: पाठ) -> पाठ { लौटाओ मान; }\n')
+            # Keep the generated bridge separate from authored files.
+            bridge = source / ".yantra" / "studio.bhash"
+            bridge.parent.mkdir(exist_ok=True)
+            atomic_write(bridge, 'फलन भाष_दृश्य(मान: पाठ) -> पाठ { लौटाओ मान; }\n')
             exports = "bhash_studio_screen = भाष_दृश्य(पाठ) -> पाठ\n"
         atomic_write(output / "bhash.exports", exports)
         activity = output / "app/src/main/java/org/bhashitva/androidstarter/MainActivity.kt"
@@ -455,7 +460,7 @@ class AndroidTarget:
                   "sources": {name: hashlib.sha256(text.encode("utf-8")).hexdigest() for name, text in snapshot.items()}}
         atomic_write(job / "build-inputs.json", json.dumps(record, indent=2))
         for name, text in snapshot.items():
-            atomic_write(job / name, text)
+            self.stage_source(project, job, name, text)
         if operation != "export":
             report("ऐप बनाया जा रहा है…" if operation == "build" else "ऐप बनाकर उपकरण पर चलाया जा रहा है…")
             args = ["android", operation, str(output)]
@@ -471,3 +476,9 @@ class AndroidTarget:
             if not apk.is_file():
                 raise StudioError("निर्माण ने अपेक्षित परीक्षण पैकेज नहीं दिया। औज़ार संस्करण और निर्माण विवरण जाँचें।")
         return output
+
+    def stage_source(self, project, destination, name, text):
+        relative = project.file(name).relative_to(project.root)
+        file = destination / relative
+        file.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(file, text)

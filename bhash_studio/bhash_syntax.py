@@ -1,8 +1,14 @@
 """Lightweight editor tokenization for the Bhash 0.25.0 grammar."""
 
 from dataclasses import dataclass
+from pathlib import Path
 import re
+import shutil
+import subprocess
+from tempfile import TemporaryDirectory
 from unicodedata import normalize
+
+from .errors import StudioError
 
 
 # Keep these spellings aligned with the compiler release pinned by AndroidTarget.
@@ -71,3 +77,32 @@ def analyze(source, caret=None):
                if key.startswith(prefix) and key != current)
     options = [word for _, word in sorted(matches, key=lambda item: (len(item[0]), item[0]))[:6]]
     return ranges, Completion(start, end, tuple(options)) if options else None
+
+
+def check_syntax(tools, source):
+    """Check an unsaved UTF-8 buffer using the compiler's syntax-only command."""
+    tools.validate()
+    compiler = Path(tools.compiler).resolve()
+    java = str(Path(tools.java).resolve())
+    with TemporaryDirectory(prefix="yantra-syntax-") as directory:
+        folder = Path(directory)
+        (folder / "buffer.bhash").write_text(source, encoding="utf-8", newline="\n")
+        jar = str(compiler)
+        if not jar.isascii():
+            # Windows Java can lose non-ASCII characters in command-line paths.
+            shutil.copyfile(compiler, folder / "compiler.jar")
+            jar = "compiler.jar"
+        result = subprocess.run(
+            [java, "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+             "-Dsun.stdout.encoding=UTF-8", "-Dsun.stderr.encoding=UTF-8", "-jar", jar, "check", "buffer.bhash"],
+            cwd=folder, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            encoding="utf-8", errors="replace", timeout=8,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    diagnostics = tuple(
+        (int(match[1]), int(match[2]), match[3])
+        for match in re.finditer(r"^.*buffer\.bhash:(\d+):(\d+):\s*([^\r\n]+)", result.stdout, re.MULTILINE)
+    )
+    if result.returncode and not diagnostics:
+        raise StudioError("वाक्यविन्यास जाँच नहीं चल सकी। जावा और भाष कंपाइलर की सेटिंग जाँचें।")
+    return diagnostics

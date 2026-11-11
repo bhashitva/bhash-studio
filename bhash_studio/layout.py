@@ -117,10 +117,10 @@ def handlers(screen):
     return list(dict.fromkeys(node.action.handler for node in walk(screen.content) if node.action))
 
 
-def validate_handlers(screen, source):
+def validate_handlers(screen, source, *additional_sources):
     # This is a bridge contract check. Full Bhash type checking remains in the compiler.
-    normalized = unicodedata.normalize("NFC", source)
+    sources = [unicodedata.normalize("NFC", text) for text in (source, *additional_sources)]
     for handler in handlers(screen):
         pattern = r"फलन\s+" + re.escape(handler) + r"\s*\(\s*[^():\s]+\s*:\s*पाठ\s*\)\s*->\s*पाठ\s*\{"
-        if not re.search(pattern, normalized):
+        if not any(re.search(pattern, text) for text in sources):
             raise StudioError(f"बटन के लिए फलन ‘{handler}’ का रूप फलन नाम(मान: पाठ) -> पाठ रखें।")

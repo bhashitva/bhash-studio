@@ -71,6 +71,24 @@ class AndroidTests(unittest.TestCase):
     def test_repeated_export_has_isolated_output(self):
         self.assertNotEqual(self.execute(), self.execute())
 
+    def test_export_includes_nested_sources_and_finds_a_handler_in_them(self):
+        folder = self.project.root / "सहायक"
+        folder.mkdir()
+        code = self.project.read(SOURCE)
+        self.project.file(SOURCE).write_text("", encoding="utf-8")
+        (folder / "स्वागत.bhash").write_text(code, encoding="utf-8")
+        (folder / "notes.txt").write_text("not code", encoding="utf-8")
+        for name in (BUILD_DIRECTORY, ".studio", ".git"):
+            ignored = self.project.root / name
+            ignored.mkdir()
+            (ignored / "ignored.bhash").write_text("not code", encoding="utf-8")
+        output = self.execute()
+        self.assertEqual((output / "src/सहायक/स्वागत.bhash").read_text(encoding="utf-8"), code)
+        self.assertEqual({file.name for file in (output / "src").rglob("*.bhash")}, {SOURCE, "स्वागत.bhash"})
+        self.assertEqual((output.parent / "सहायक/स्वागत.bhash").read_text(encoding="utf-8"), code)
+        record = json.loads((output.parent / "build-inputs.json").read_text(encoding="utf-8"))
+        self.assertIn("सहायक/स्वागत.bhash", record["sources"])
+
     def test_network_permission_maps_to_manifest(self):
         snapshot = self.project.snapshot()
         config = loads(snapshot[CONFIG])
