@@ -6,7 +6,7 @@ Run the core suite from the repository root. It uses the Python standard library
 python -m unittest discover -s tests -v
 ```
 
-On a desktop session, enable the real Tk widget tests. They switch files through the File menu, save and check the project, and reopen it. They verify keyword coloring outside strings, live completion and keyboard acceptance, indented construct insertion, and Android job cancellation.
+On a desktop session, enable the real Tk widget tests. They open Help from the menu, browse to a Hindi project's configuration file, check toolchain file filters, switch files, and save and check the project. They also verify keyword coloring outside strings, live completion and keyboard acceptance, indented construct insertion, and Android job cancellation.
 
 ```powershell
 $env:BHASH_STUDIO_GUI_TESTS = '1'

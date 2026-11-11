@@ -84,7 +84,16 @@ class Project:
 
     @classmethod
     def open(cls, directory):
-        project = cls(LocalPath(directory).expanduser().resolve())
+        selected = LocalPath(directory).expanduser()
+        if selected.is_dir():
+            root = selected
+        elif selected.name == CONFIG:
+            root = selected.parent
+        elif selected.is_file():
+            raise StudioError(f"परियोजना खोलने के लिए ‘{CONFIG}’ चुनें। चुनी गई फ़ाइल — {selected}")
+        else:
+            raise StudioError(f"परियोजना फ़ोल्डर नहीं मिला — {selected.absolute()}")
+        project = cls(root.resolve())
         for filename in FILES:
             project.read(filename)
         return project
@@ -100,7 +109,7 @@ class Project:
     def read(self, filename):
         file = self.file(filename)
         if not file.is_file():
-            raise StudioError(f"परियोजना फ़ाइल ‘{filename}’ नहीं मिली।")
+            raise StudioError(f"परियोजना फ़ाइल ‘{filename}’ नहीं मिली। खोजा गया मार्ग — {file}")
         if file.stat().st_size > MAX_SOURCE * 4:
             raise StudioError("परियोजना फ़ाइल का आकार बहुत बड़ा है।")
         try:

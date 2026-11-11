@@ -4,11 +4,94 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from bhash_studio.project import FILES, SOURCE, LAYOUT, Project
+from bhash_studio.project import CONFIG, FILES, SOURCE, LAYOUT, LocalPath, Project
 
 
 @unittest.skipUnless(os.environ.get("BHASH_STUDIO_GUI_TESTS") == "1", "Enable GUI tests on a desktop session")
 class DesktopTests(unittest.TestCase):
+    def test_help_menu_opens_and_closes_read_only_help(self):
+        import tkinter as tk
+        from bhash_studio.app import Studio
+
+        root = tk.Tk()
+        try:
+            app = Studio(root)
+            menu, index = app.menu_items["help"]
+            menu.invoke(index)
+            root.update()
+            window = next(widget for widget in root.winfo_children() if isinstance(widget, tk.Toplevel))
+            text = next(widget for widget in window.winfo_children() if isinstance(widget, tk.Text))
+            self.assertEqual(text.cget("state"), "disabled")
+            self.assertIn("भाष यंत्र", text.get("1.0", "2.0"))
+            window.destroy()
+            self.assertTrue(root.winfo_exists())
+        finally:
+            root.destroy()
+
+    def test_project_open_menu_chooses_the_real_config_path(self):
+        import tkinter as tk
+        from bhash_studio.app import Studio
+        from bhash_studio.path_picker import PathPicker
+
+        with tempfile.TemporaryDirectory() as temp:
+            folder = LocalPath(temp)
+            project = Project.create(folder / "मेरा-ऐप", "अभिवादन")
+            (project.root / (CONFIG + ".txt")).write_text("test", encoding="utf-8")
+            root = tk.Tk()
+            try:
+                app = Studio(root)
+                observed = []
+
+                def pick():
+                    picker = next(widget for widget in root.winfo_children() if isinstance(widget, PathPicker))
+                    try:
+                        observed.append(picker.directory)
+                        picker.files.selection_set(picker.files.get_children()[0])
+                        picker.select()
+                        rows = picker.files.get_children()
+                        observed.append([picker.files.item(row, "text") for row in rows])
+                        picker.files.selection_set(rows[0])
+                        picker.select()
+                    finally:
+                        if picker.winfo_exists():
+                            picker.destroy()
+
+                with patch("bhash_studio.path_picker.LocalPath.cwd", return_value=folder):
+                    root.after_idle(pick)
+                    menu, index = app.menu_items["open"]
+                    menu.invoke(index)
+                self.assertEqual(observed, [folder, [CONFIG]])
+                self.assertEqual(app.project.root, project.root)
+                self.assertIn("अभिवादन", app.editor.get("1.0", "end"))
+            finally:
+                root.destroy()
+
+    def test_toolchain_picker_filters_files_by_field(self):
+        import tkinter as tk
+        from bhash_studio.path_picker import PathPicker, jar_file, java_program
+
+        java = "java.exe" if os.name == "nt" else "java"
+        with tempfile.TemporaryDirectory() as temp:
+            folder = LocalPath(temp)
+            (folder / "औज़ार").mkdir()
+            for filename in ("भाष.jar", java, "जानकारी.txt"):
+                (folder / filename).touch()
+            root = tk.Tk()
+            try:
+                for predicate, expected in ((jar_file, ["औज़ार", "भाष.jar"]),
+                                            (java_program, ["औज़ार", java]),
+                                            (None, ["औज़ार"])):
+                    with self.subTest(expected=expected), patch(
+                        "bhash_studio.path_picker.LocalPath.cwd", return_value=folder,
+                    ):
+                        picker = PathPicker(root, "चुनें", predicate)
+                        self.assertEqual([picker.files.item(row, "text") for row in picker.files.get_children()],
+                                         expected)
+                        picker.destroy()
+                root.update_idletasks()
+            finally:
+                root.destroy()
+
     def test_edit_save_switch_validate_and_reopen(self):
         import tkinter as tk
         from bhash_studio.app import Studio

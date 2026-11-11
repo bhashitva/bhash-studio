@@ -3,6 +3,7 @@
 import argparse
 from pathlib import Path
 import queue
+from textwrap import fill
 import threading
 import tkinter as tk
 from tkinter import ttk
@@ -11,14 +12,15 @@ from .android import AndroidTarget, Toolchain
 from .bhash_syntax import COMMON_KEYWORDS, CONSTRUCTS
 from .editor import BhashEditor
 from .errors import StudioError
-from .project import FILES, SOURCE, Project, digest
+from .path_picker import choose_path, jar_file, java_program
+from .project import CONFIG, FILES, SOURCE, Project, digest
 from .targets import validate_snapshot
 
 
 APP_NAME = "भाष यंत्र"
 HELP = '''भाष यंत्र में आपका स्वागत है
 
-नई परियोजना के लिए ऐप का नाम और एक नए फ़ोल्डर का पूरा मार्ग लिखें। पहले से बनी परियोजना खोलने के लिए उसका फ़ोल्डर लिखें।
+नई परियोजना के लिए ऐप का नाम और नए फ़ोल्डर का नाम लिखें। उसका मूल फ़ोल्डर चुनें। पहले से बनी परियोजना खोलने के लिए उसकी परियोजना.भाषविन्यास फ़ाइल चुनें।
 
 परियोजना.भाषविन्यास में नाम, लक्ष्य और अनुमतियाँ हैं। सत्य, असत्य और रिक्त भाष के मूल मान हैं। ऐप की पहचान बनाए रखें, ताकि उसके अद्यतन उसी ऐप पर लगें।
 
@@ -30,7 +32,7 @@ HELP = '''भाष यंत्र में आपका स्वागत �
 
 पूर्वावलोकन केवल दृश्य की बनावट दिखाता है। बटन का भाष फलन उपकरण पर चलता है। पूरी भाष जाँच निर्माण के समय कंपाइलर करता है।
 
-औज़ार में आधिकारिक भाष कंपाइलर 0.25.0 की जार फ़ाइल, जावा कार्यक्रम और एंड्रॉयड औज़ार का मार्ग लिखें। एंड्रॉयड स्तर 36, निर्माण औज़ार 35.0.0 और मूल विकास औज़ार 28.2.13676358 स्थापित होने चाहिए।
+औज़ार में आधिकारिक भाष कंपाइलर 0.25.0 की जार फ़ाइल, जावा कार्यक्रम और एंड्रॉयड औज़ार फ़ोल्डर चुनें। एंड्रॉयड स्तर 36, निर्माण औज़ार 35.0.0 और मूल विकास औज़ार 28.2.13676358 स्थापित होने चाहिए।
 
 एंड्रॉयड निर्यात से चुने हुए निर्माण फ़ोल्डर में पूरी परियोजना बनाएँ। विंडोज़ पर निर्माण फ़ोल्डर के मार्ग में अंग्रेज़ी अक्षर और अंक रखें। आपकी संपादित परियोजना हिंदी में रह सकती है। ऐप बनाएँ से परीक्षण पैकेज बनाएँ। उपकरण पर चलाएँ से पैकेज बनाकर चालू एमुलेटर या अधिकृत फ़ोन पर स्थापित करें। एक से अधिक उपकरण होने पर औज़ार में उपकरण की पहचान लिखें। डिफ़ॉल्ट निर्माण स्थान अस्थायी है। रखने योग्य पैकेज की स्थायी प्रति बनाएँ।
 
@@ -39,7 +41,7 @@ HELP = '''भाष यंत्र में आपका स्वागत �
 
 
 class Form(tk.Toplevel):
-    def __init__(self, parent, title, fields, action="स्वीकार करें"):
+    def __init__(self, parent, title, fields, action="स्वीकार करें", paths=None):
         super().__init__(parent)
         self.title(title)
         self.result = None
@@ -47,14 +49,20 @@ class Form(tk.Toplevel):
         self.resizable(True, False)
         self.columnconfigure(1, weight=1)
         self.entries = {}
+        self.paths = paths or {}
         for index, (key, label, value) in enumerate(fields):
             ttk.Label(self, text=label).grid(row=index, column=0, padx=12, pady=8, sticky="w")
             entry = ttk.Entry(self, width=65)
             entry.insert(0, value)
             entry.grid(row=index, column=1, padx=12, pady=8, sticky="ew")
             self.entries[key] = entry
+            if key in self.paths:
+                entry.configure(state="readonly")
+                ttk.Button(self, text="चुनें…", command=lambda key=key, label=label: self.browse(key, label)).grid(
+                    row=index, column=2, padx=(0, 12), pady=8,
+                )
         actions = ttk.Frame(self)
-        actions.grid(row=len(fields), column=0, columnspan=2, pady=12)
+        actions.grid(row=len(fields), column=0, columnspan=3, pady=12)
         ttk.Button(actions, text=action, command=self.accept).pack(side="left", padx=8)
         ttk.Button(actions, text="रद्द करें", command=self.destroy).pack(side="left", padx=8)
         self.bind("<Escape>", lambda _: self.destroy())
@@ -62,8 +70,18 @@ class Form(tk.Toplevel):
         next(iter(self.entries.values())).focus_set()
 
     def accept(self):
-        self.result = {key: entry.get().strip() for key, entry in self.entries.items()}
+        self.result = {key: entry.get() if key in self.paths else entry.get().strip()
+                       for key, entry in self.entries.items()}
         self.destroy()
+
+    def browse(self, key, title):
+        path = choose_path(self, title, self.paths[key])
+        if path is not None:
+            entry = self.entries[key]
+            entry.configure(state="normal")
+            entry.delete(0, "end")
+            entry.insert(0, path)
+            entry.configure(state="readonly")
 
 
 class Studio:
@@ -260,18 +278,22 @@ class Studio:
         if not self.confirm_leave():
             return
         dialog = Form(self.root, "नई परियोजना", [("name", "ऐप का नाम", "मेरा पहला ऐप"),
-                      ("directory", "नए फ़ोल्डर का पूरा मार्ग", str(Path.cwd() / "मेरा-ऐप"))], "परियोजना बनाएँ")
+                      ("folder", "नए फ़ोल्डर का नाम", "मेरा-ऐप"),
+                      ("directory", "मूल फ़ोल्डर", str(Path.cwd()))],
+                      "परियोजना बनाएँ", paths={"directory": None})
         self.root.wait_window(dialog)
         if dialog.result:
-            self.load(Project.create(dialog.result["directory"], dialog.result["name"]))
+            folder = dialog.result["folder"]
+            if not folder or folder in {".", ".."} or Path(folder).name != folder or any(c in folder for c in "/\\"):
+                raise StudioError("नए फ़ोल्डर के लिए केवल उसका नाम लिखें। मूल फ़ोल्डर अलग से चुनें।")
+            self.load(Project.create(Path(dialog.result["directory"]) / folder, dialog.result["name"]))
 
     def open_project(self):
         if not self.confirm_leave():
             return
-        dialog = Form(self.root, "परियोजना खोलें", [("directory", "परियोजना फ़ोल्डर का पूरा मार्ग", "")], "खोलें")
-        self.root.wait_window(dialog)
-        if dialog.result:
-            self.load(Project.open(dialog.result["directory"]))
+        path = choose_path(self.root, f"‘{CONFIG}’ फ़ाइल चुनें", lambda path: path.name == CONFIG)
+        if path is not None:
+            self.load(Project.open(path))
 
     def save_current(self):
         if not self.project:
@@ -314,10 +336,11 @@ class Studio:
 
     def settings(self):
         dialog = Form(self.root, "औज़ार सेटिंग", [("compiler", "आधिकारिक भाष कंपाइलर की जार फ़ाइल", self.tools.compiler),
-                      ("java", "जावा कार्यक्रम का पूरा मार्ग", self.tools.java),
+                      ("java", "जावा कार्यक्रम", self.tools.java),
                       ("sdk", "एंड्रॉयड औज़ार फ़ोल्डर", self.tools.sdk),
                       ("workspace", "निर्माण फ़ोल्डर — अक्षर और अंकों वाला मार्ग", self.tools.workspace),
-                      ("device", "उपकरण की पहचान — वैकल्पिक", self.device)])
+                      ("device", "उपकरण की पहचान — वैकल्पिक", self.device)],
+                      paths={"compiler": jar_file, "java": java_program, "sdk": None, "workspace": None})
         self.root.wait_window(dialog)
         if dialog.result:
             values = dialog.result
@@ -328,10 +351,20 @@ class Studio:
     def help(self):
         window = tk.Toplevel(self.root)
         window.title(f"{APP_NAME} सहायता")
-        text = tk.Text(window, wrap="word", width=80, height=30, font=("Nirmala UI", 12), padx=16, pady=16)
+        window.transient(self.root)
+        window.bind("<Escape>", lambda _event: window.destroy())
+        # Use explicit line breaks instead of Tk's native wrapped layout for long Hindi paragraphs.
+        text = tk.Text(window, wrap="none", width=80, height=30, font=("Nirmala UI", 12), padx=16, pady=16)
+        vertical = ttk.Scrollbar(window, orient="vertical", command=text.yview)
+        horizontal = ttk.Scrollbar(window, orient="horizontal", command=text.xview)
+        text.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+        vertical.pack(side="right", fill="y")
+        horizontal.pack(side="bottom", fill="x")
         text.pack(fill="both", expand=True)
-        text.insert("1.0", HELP)
+        text.insert("1.0", "\n\n".join(fill(paragraph, width=76, break_long_words=False, break_on_hyphens=False)
+                                       for paragraph in HELP.strip().split("\n\n")))
         text.configure(state="disabled")
+        text.focus_set()
 
     def start_job(self, operation):
         if self.worker is not None:
