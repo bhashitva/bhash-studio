@@ -10,6 +10,58 @@ from bhash_studio.project import CONFIG, FILES, SOURCE, LAYOUT, LocalPath, Proje
 
 @unittest.skipUnless(os.environ.get("BHASH_STUDIO_GUI_TESTS") == "1", "Enable GUI tests on a desktop session")
 class DesktopTests(unittest.TestCase):
+    def test_explorer_indicator_and_multi_file_trash(self):
+        import tkinter as tk
+        from bhash_studio.app import Studio
+
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            project = Project.create(base / "मेरा-ऐप", "परीक्षा")
+            project.add_folder("फ़ोल्डर")
+            for name in ("पहली.txt", "दूसरी.txt", "तीसरी.txt"):
+                project.add_file(name, folder="फ़ोल्डर")
+            trash = base / "trash"
+            trash.mkdir()
+            root = tk.Tk()
+            try:
+                studio = Studio(root, project, settings_file=base / "settings.json")
+                explorer = studio.explorer
+                tree = explorer.tree
+                root.update()
+                folder = next(item for item, entry in explorer.entries.items() if entry == ("फ़ोल्डर", True))
+                _, y, width, height = tree.bbox(folder)
+                y += height // 2
+                x = next(x for x in range(width)
+                         if tree.identify_element(x, y).endswith(("indicator", "disclosure")))
+                tree.event_generate("<ButtonPress-1>", x=x, y=y)
+                tree.event_generate("<ButtonRelease-1>", x=x, y=y)
+                root.update()
+                self.assertTrue(tree.item(folder, "open"))
+                files = {explorer.entries[item][0]: item for item in tree.get_children(folder)}
+                self.assertEqual(len(files), 3)
+
+                first, second = "फ़ोल्डर/पहली.txt", "फ़ोल्डर/दूसरी.txt"
+                studio.select_file(first)
+                studio.editor.insert("1.0", "अधूरा")
+                tree.selection_set(files[first], files[second])
+                _, y, _, height = tree.bbox(files[first])
+                with patch.object(explorer.menu, "tk_popup"):
+                    tree.event_generate("<Button-3>", x=40, y=y + height // 2)
+                self.assertEqual(set(explorer.selected_files()), {first, second})
+                with patch("bhash_studio.app.messagebox.askokcancel", return_value=False), \
+                        patch("bhash_studio.app.move_to_trash") as move:
+                    explorer.menu.invoke("end")
+                    move.assert_not_called()
+                with patch("bhash_studio.app.messagebox.askokcancel", return_value=True), \
+                        patch("bhash_studio.app.move_to_trash", side_effect=lambda path: path.rename(trash / path.name)):
+                    explorer.menu.invoke("end")
+                self.assertEqual({path.name for path in trash.iterdir()}, {"पहली.txt", "दूसरी.txt"})
+                self.assertTrue(project.file("फ़ोल्डर/तीसरी.txt").is_file())
+                self.assertNotIn(first, studio.editors)
+                self.assertEqual(studio.file_states[first]["text"], "अधूरा")
+            finally:
+                root.destroy()
+
     @unittest.skipUnless(sys.platform == "win32", "Windows keyboard messages")
     def test_windows_hindi_keyboard_in_editor_and_form(self):
         import ctypes as c

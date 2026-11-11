@@ -20,6 +20,7 @@
 कार्यक्रम सीधे भी चला सकते हैं।
 
 ```sh
+python -m pip install .
 python -m bhash_studio
 ```
 

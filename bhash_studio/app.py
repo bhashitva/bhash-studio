@@ -4,10 +4,11 @@ import argparse
 from dataclasses import replace
 from pathlib import Path
 import queue
+import sys
 from textwrap import fill
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from .android import AndroidTarget, Toolchain
 from .bhash_syntax import COMMON_KEYWORDS, CONSTRUCTS
@@ -24,6 +25,21 @@ from .targets import validate_snapshot
 
 
 APP_NAME = "भाष यंत्र"
+
+
+def move_to_trash(path):
+    try:
+        if sys.platform == "win32":
+            from send2trash.win.modern import send2trash
+        else:
+            from send2trash import send2trash
+    except ImportError as error:
+        raise StudioError("कूड़ेदान के लिए भाष यंत्र की निर्भरताएँ स्थापित करें — python -m pip install .") from error
+    send2trash(str(path))
+    if path.exists():
+        raise OSError("फ़ाइल अपने मूल स्थान पर है।")
+
+
 HELP = '''भाष यंत्र में आपका स्वागत है
 
 नई परियोजना के लिए ऐप का नाम और नए फ़ोल्डर का नाम लिखें। उसका मूल फ़ोल्डर चुनें। पहले से बनी परियोजना खोलने के लिए उसकी परियोजना.भाषविन्यास फ़ाइल चुनें।
@@ -127,7 +143,7 @@ class Studio:
         panes = ttk.Panedwindow(root, orient="horizontal")
         panes.pack(fill="both", expand=True, padx=14)
         self.explorer = ProjectTree(panes, self.select_file, self.guard,
-                                    self.new_file, self.new_folder, self.import_file)
+                                    self.new_file, self.new_folder, self.import_file, self.trash_files)
         self.explorer.configure(width=240)
         panes.add(self.explorer, weight=0)
         left = ttk.Frame(panes)
@@ -276,7 +292,7 @@ class Studio:
         for filename in FILES:
             file_picker.add_radiobutton(
                 label=filename, value=filename, variable=self.selected_file,
-                command=lambda name=filename: self.select_file(name),
+                command=lambda name=filename: self.guard(lambda: self.select_file(name)),
             )
         file_menu.add_cascade(label="फ़ाइल बदलें", menu=file_picker)
         self.menu_items["files"] = (file_menu, file_menu.index("end"))
@@ -382,6 +398,9 @@ class Studio:
         if active == filename:
             active = tabs[min(index, len(tabs) - 1)] if tabs else None
         self.persist_project(tabs, active)
+        self.forget_tab(filename, active)
+
+    def forget_tab(self, filename, active=None):
         page = self.editors.pop(filename).master
         self.notebook.forget(page)
         page.destroy()
@@ -522,6 +541,43 @@ class Studio:
             self.project.add_file(source.name, source, folder)
             self.explorer.refresh(folder)
             self.log(f"परियोजना में फ़ाइल की प्रति रखी गई — {source.name}")
+
+    def trash_files(self, names):
+        if not self.project or not names or self.closing:
+            return
+        paths = [(name, self.project.file(name)) for name in names]
+        for name, path in paths:
+            if not path.is_file():
+                raise StudioError(f"फ़ाइल नहीं मिली — {name}")
+        if not messagebox.askokcancel(
+            "फ़ाइलें कूड़ेदान में भेजें",
+            f"{len(paths)} चुनी हुई फ़ाइलें कूड़ेदान में भेजें?",
+            parent=self.root, default=messagebox.CANCEL,
+        ):
+            return
+        self.persist_project(list(self.editors), self.active)
+        count = 0
+        for name, path in paths:
+            try:
+                move_to_trash(path)
+            except OSError as error:
+                self.log(f"फ़ाइल कूड़ेदान में नहीं भेजी जा सकी — {name}\n{error}")
+                continue
+            count += 1
+            if name in self.editors:
+                self.forget_tab(name)
+            self.buffers.pop(name, None)
+            self.hashes.pop(name, None)
+            if "text" not in self.file_states.get(name, {}):
+                self.file_states.pop(name, None)
+            if name in FILES:
+                for widget in self.preview.winfo_children():
+                    widget.destroy()
+        self.explorer.refresh()
+        self.update_menu_state()
+        if count:
+            self.persist_project(list(self.editors), self.active)
+            self.log(f"{count} फ़ाइलें कूड़ेदान में भेज दी गईं।")
 
     def save_current(self):
         if self.active is None:
