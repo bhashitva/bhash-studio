@@ -11,7 +11,7 @@ from unittest.mock import patch
 from bhash_studio.android import AndroidTarget, Toolchain, run_tool
 from bhash_studio.config import dumps, loads
 from bhash_studio.errors import StudioError
-from bhash_studio.project import CONFIG, SOURCE, Project
+from bhash_studio.project import BUILD_DIRECTORY, CONFIG, SOURCE, Project
 
 
 class AndroidTests(unittest.TestCase):
@@ -22,10 +22,16 @@ class AndroidTests(unittest.TestCase):
         self.project = Project.create(self.root / "ऐप", "हिंदी ऐप")
         self.jar = self.root / "compiler.jar"
         self.jar.write_bytes(b"test compiler fixture")
-        self.tools = Toolchain(str(self.jar), sys.executable, "", str(self.root / "builds"))
+        self.tools = Toolchain(str(self.jar), sys.executable)
         self.calls = []
 
     def fixture_runner(self, command, cwd, env, log, cancel):
+        if "org.gradle.wrapper.GradleWrapperMain" in command:
+            self.calls.append(command)
+            apk = cwd / "app/build/outputs/apk/debug/app-debug.apk"
+            apk.parent.mkdir(parents=True)
+            apk.write_bytes(b"APK fixture")
+            return ""
         self.assertTrue(all(value.isascii() for value in command[5:]))
         arguments = [base64.urlsafe_b64decode(value).decode("utf-8") for value in command[5:]]
         self.calls.append(arguments)
@@ -34,6 +40,8 @@ class AndroidTests(unittest.TestCase):
             (destination / "src").mkdir(parents=True)
             (destination / "src/greeting.bhash").write_text("old", encoding="utf-8")
             (destination / "gradle.properties").write_text("", encoding="utf-8")
+            (destination / "gradle").mkdir()
+            (destination / "gradle/bhash-native.gradle").write_text("                commandLine(command)\n", encoding="utf-8")
             (destination / "app/src/main/java/org/bhashitva/androidstarter").mkdir(parents=True)
             manifest = destination / "app/src/main/AndroidManifest.xml"
             manifest.write_text('<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:label="@string/app_name"/></manifest>', encoding="utf-8")
@@ -50,6 +58,7 @@ class AndroidTests(unittest.TestCase):
     def test_export_preserves_authored_source_and_records_inputs(self):
         original = self.project.snapshot()
         output = self.execute()
+        self.assertEqual(output.parent.parent, self.project.root / BUILD_DIRECTORY)
         self.assertEqual(self.project.snapshot(), original)
         self.assertEqual((output / "src" / SOURCE).read_text(encoding="utf-8"), original[SOURCE])
         self.assertFalse((output / "src/greeting.bhash").exists())
@@ -90,9 +99,13 @@ class AndroidTests(unittest.TestCase):
         with patch.dict(os.environ, {"JAVA_HOME": str(self.root / "jdk")}), patch("shutil.which", return_value="other-java"):
             self.assertIn(str(self.root / "jdk"), Toolchain.discover().java)
 
-    def test_build_calls_existing_cli_without_shell(self):
+    def test_build_calls_gradle_without_shell(self):
         output = self.execute("build")
-        self.assertEqual(self.calls[-1][-3:], ["android", "build", str(output)])
+        if os.name == "nt":
+            self.assertEqual(self.calls[-1][-3:], ["gradle/wrapper/gradle-wrapper.jar",
+                                                  "org.gradle.wrapper.GradleWrapperMain", ":app:assembleDebug"])
+        else:
+            self.assertEqual(self.calls[-1][-3:], ["android", "build", str(output)])
 
     def test_subprocess_success(self):
         text = run_tool([sys.executable, "-c", "print('ok')"], self.root, os.environ.copy(), self.root / "log", threading.Event(), timeout=5)

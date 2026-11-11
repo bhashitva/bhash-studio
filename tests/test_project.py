@@ -70,6 +70,22 @@ class ProjectTests(unittest.TestCase):
         with self.assertRaises(StudioError):
             self.project.read("../secret")
 
+    def test_add_file_creates_or_copies_without_overwriting(self):
+        filename = "नया.भाषदृश्य"
+        self.project.add_file(filename)
+        self.assertEqual(self.project.read(filename), "")
+        original = Path(self.temp.name) / "चित्र.bin"
+        data = b"\x00\xff"
+        original.write_bytes(data)
+        self.project.add_file(original.name, original)
+        self.assertEqual((self.project.root / original.name).read_bytes(), data)
+        self.assertEqual(original.read_bytes(), data)
+        with self.assertRaises(StudioError):
+            self.project.add_file(original.name)
+        with self.assertRaises(StudioError):
+            self.project.add_file("../बाहर")
+        self.assertEqual((self.project.root / original.name).read_bytes(), data)
+
     def test_long_hindi_project_paths(self):
         parent = LocalPath(self.temp.name) / ("a" * 80) / ("b" * 80)
         parent.mkdir(parents=True)

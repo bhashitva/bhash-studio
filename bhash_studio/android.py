@@ -8,14 +8,13 @@ import os
 import shutil
 import signal
 import subprocess
-import tempfile
 import time
 import uuid
 import xml.etree.ElementTree as ET
 
 from .errors import StudioError
 from .layout import handlers, walk
-from .project import CONFIG, LAYOUT, SOURCE, LocalPath as Path, atomic_write
+from .project import BUILD_DIRECTORY, CONFIG, LAYOUT, SOURCE, LocalPath as Path, atomic_write
 from .targets import require_android, validate_snapshot
 
 
@@ -266,7 +265,6 @@ class Toolchain:
     compiler: str = ""
     java: str = ""
     sdk: str = ""
-    workspace: str = ""
 
     @classmethod
     def discover(cls):
@@ -282,8 +280,7 @@ class Toolchain:
         standard_sdk = Path(os.environ.get("LOCALAPPDATA", "")) / "Android/Sdk"
         if not sdk and os.name == "nt" and standard_sdk.is_dir():
             sdk = str(standard_sdk)
-        return cls(os.environ.get("BHASH_COMPILER_JAR", ""), java, sdk,
-                   os.environ.get("BHASH_STUDIO_BUILD_ROOT", str(Path(tempfile.gettempdir()) / "bhash-studio-builds")))
+        return cls(os.environ.get("BHASH_COMPILER_JAR", ""), java, sdk)
 
     def validate(self):
         if not self.compiler or not Path(self.compiler).is_file() or Path(self.compiler).suffix.lower() != ".jar":
@@ -355,11 +352,57 @@ class AndroidTarget:
         self.tools = tools
         self.runner = runner
 
-    def command(self, arguments, job):
+    def command(self, arguments):
         # ASCII transport preserves developer paths independently of Windows ANSI encoding.
         encoded = [base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii") for value in arguments]
-        return [self.tools.java, "-Dfile.encoding=UTF-8", "--class-path", str(job / "compiler.jar"),
-                str(job / "BhashStudioLauncher.java"), *encoded]
+        # The launcher and compiler are in the job's working directory.
+        return [self.tools.java, "-Dfile.encoding=UTF-8", "--class-path", "compiler.jar",
+                "BhashStudioLauncher.java", *encoded]
+
+    def prepare_unicode_build(self, output, job):
+        # The pinned starter passes absolute arguments to a legacy Windows Java launcher.
+        script = output / "gradle/bhash-native.gradle"
+        original = script.read_text(encoding="utf-8")
+        command = "                commandLine(command)"
+        if command not in original:
+            raise StudioError("इस कंपाइलर का निर्माण प्रारूप समर्थित नहीं है।")
+        replacement = """                def encoded = command.drop(3).collect {
+                    Base64.getUrlEncoder().encodeToString(it.toString().getBytes('UTF-8'))
+                }
+                commandLine([command[0], '-Dfile.encoding=UTF-8', '--class-path',
+                    'bhash/compiler.jar', 'BhashStudioLauncher.java'] + encoded)"""
+        original = original.replace(
+            "layout.buildDirectory.dir('generated/bhash')",
+            "providers.provider { rootProject.layout.projectDirectory.dir('n') }",
+            1,
+        )
+        atomic_write(script, original.replace(command, replacement, 1))
+        shutil.copyfile(job / "BhashStudioLauncher.java", output / "BhashStudioLauncher.java")
+
+    def build_unicode_project(self, output, job, apk, app_id, log, cancel, run, device):
+        env = self.tools.environment()
+        self.runner(self.command(["android", "doctor", str(output)]), job, env, log, cancel)
+        adb = None
+        if run:
+            sdk = env.get("ANDROID_HOME") or env.get("ANDROID_SDK_ROOT")
+            if not sdk:
+                raise StudioError("औज़ार सेटिंग में एंड्रॉयड विकास फ़ोल्डर चुनें।")
+            adb = str(Path(sdk) / "platform-tools/adb.exe")
+            listing = self.runner([adb, "devices"], output, env, log, cancel)
+            ready = [fields[0] for line in listing.splitlines()
+                     if len(fields := line.split()) >= 2 and fields[1] == "device"]
+            if not device and len(ready) == 1:
+                device = ready[0]
+            if device not in ready:
+                raise StudioError("उपकरण उपलब्ध नहीं है। एमुलेटर चलाएँ या औज़ार सेटिंग में तैयार उपकरण चुनें।")
+        self.runner([self.tools.java, "-Dfile.encoding=UTF-8", "-cp", "gradle/wrapper/gradle-wrapper.jar",
+                     "org.gradle.wrapper.GradleWrapperMain", ":app:assembleDebug"],
+                    output, env, log, cancel)
+        if adb and apk.is_file():
+            self.runner([adb, "-s", device, "install", "-r", apk.relative_to(output).as_posix()],
+                        output, env, log, cancel)
+            self.runner([adb, "-s", device, "shell", "am", "start", "-n",
+                         f"{app_id}/org.bhashitva.androidstarter.MainActivity"], output, env, log, cancel)
 
     def execute(self, project, snapshot, operation, cancel, report, device=""):
         if operation not in {"export", "build", "run"}:
@@ -367,14 +410,8 @@ class AndroidTarget:
         config, screen = validate_snapshot(snapshot)
         require_android(config)
         self.tools.validate()
-        job_id = uuid.uuid4().hex
-        managed = project.root / ".studio"
-        if managed.is_symlink() or managed.resolve().parent != project.root:
-            raise StudioError("निर्माण फ़ोल्डर परियोजना के भीतर होना चाहिए।")
-        managed.mkdir(exist_ok=True)
-        workspace = Path(self.tools.workspace or Path(tempfile.gettempdir()) / "bhash-studio-builds").resolve()
-        if os.name == "nt" and not str(workspace).isascii():
-            raise StudioError("औज़ार में निर्माण फ़ोल्डर का मार्ग केवल अंग्रेज़ी अक्षरों और अंकों से चुनें। आपकी परियोजना का नाम हिंदी में रह सकता है।")
+        job_id = uuid.uuid4().hex[:16]
+        workspace = project.file(BUILD_DIRECTORY)
         workspace.mkdir(parents=True, exist_ok=True)
         job = workspace / job_id
         job.mkdir()
@@ -384,7 +421,7 @@ class AndroidTarget:
         log = job / "tool-output.log"
         report("निर्माण फ़ोल्डर — " + str(job))
         report("एंड्रॉयड परियोजना तैयार हो रही है…")
-        self.runner(self.command(["android", "init", str(output), "--id", config["ऐप_पहचान"], "--name", config["नाम"]], job),
+        self.runner(self.command(["android", "init", str(output), "--id", config["ऐप_पहचान"], "--name", config["नाम"]]),
                     job, self.tools.environment(), log, cancel)
         source = output / "src"
         for file in source.glob("*.bhash"):
@@ -408,11 +445,15 @@ class AndroidTarget:
             ET.SubElement(manifest.getroot(), "uses-permission", {"{http://schemas.android.com/apk/res/android}name": "android.permission.INTERNET"})
         manifest.write(manifest_path, encoding="utf-8", xml_declaration=True)
         properties = output / "gradle.properties"
-        atomic_write(properties, properties.read_text(encoding="utf-8") + "\norg.gradle.daemon=false\n")
+        build_options = "\norg.gradle.daemon=false\n"
+        unicode_build = os.name == "nt" and not str(workspace).isascii()
+        if unicode_build:
+            build_options += "android.overridePathCheck=true\n"
+            self.prepare_unicode_build(output, job)
+        atomic_write(properties, properties.read_text(encoding="utf-8") + build_options)
         record = {"schema": 1, "output": str(output), "compiler_sha256": hashlib.sha256(Path(self.tools.compiler).read_bytes()).hexdigest(),
                   "sources": {name: hashlib.sha256(text.encode("utf-8")).hexdigest() for name, text in snapshot.items()}}
         atomic_write(job / "build-inputs.json", json.dumps(record, indent=2))
-        atomic_write(managed / (job_id + ".json"), json.dumps(record, indent=2))
         for name, text in snapshot.items():
             atomic_write(job / name, text)
         if operation != "export":
@@ -422,7 +463,11 @@ class AndroidTarget:
                 if not all(c.isalnum() or c in "_.:%[]-" for c in device) or device.startswith("-"):
                     raise StudioError("उपकरण की पहचान सही नहीं है।")
                 args += ["--device", device]
-            self.runner(self.command(args, job), job, self.tools.environment(), log, cancel)
-            if not (output / "app/build/outputs/apk/debug/app-debug.apk").is_file():
+            apk = output / "app/build/outputs/apk/debug/app-debug.apk"
+            if unicode_build:
+                self.build_unicode_project(output, job, apk, config["ऐप_पहचान"], log, cancel, operation == "run", device)
+            else:
+                self.runner(self.command(args), job, self.tools.environment(), log, cancel)
+            if not apk.is_file():
                 raise StudioError("निर्माण ने अपेक्षित परीक्षण पैकेज नहीं दिया। औज़ार संस्करण और निर्माण विवरण जाँचें।")
         return output

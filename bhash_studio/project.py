@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import uuid
 
@@ -24,6 +25,7 @@ CONFIG = "परियोजना.भाषविन्यास"
 LAYOUT = "पर्दा.भाषदृश्य"
 SOURCE = "मुख्य.bhash"
 FILES = (CONFIG, LAYOUT, SOURCE)
+BUILD_DIRECTORY = "bhash-studio-builds"
 DEFAULT_LAYOUT = '''<पर्दा पहचान="मुख्य" शीर्षक="मेरा पहला ऐप">
   <स्तंभ>
     <पाठ>भाष में आपका स्वागत है</पाठ>
@@ -125,6 +127,24 @@ class Project:
         if "\0" in text or len(text) > MAX_SOURCE:
             raise StudioError("यह फ़ाइल संपादन योग्य पाठ नहीं है या इसका आकार बहुत बड़ा है।")
         return text
+
+    def add_file(self, filename, source=None):
+        if (not filename or filename in {".", "..", BUILD_DIRECTORY}
+                or Path(filename).name != filename or any(char in filename for char in "/\\:\0")):
+            raise StudioError("परियोजना के लिए केवल नया फ़ाइल नाम लिखें।")
+        destination = self.file(filename)
+        try:
+            stream = destination.open("xb")
+        except FileExistsError as error:
+            raise StudioError(f"‘{filename}’ पहले से मौजूद है।") from error
+        try:
+            with stream:
+                if source is not None:
+                    with source.open("rb") as original:
+                        shutil.copyfileobj(original, stream)
+        except OSError:
+            destination.unlink()
+            raise
 
     def save(self, filename, text, expected):
         if len(text) > MAX_SOURCE:

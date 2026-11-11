@@ -38,7 +38,7 @@ HELP = '''भाष यंत्र में आपका स्वागत �
 
 औज़ार में आधिकारिक भाष कंपाइलर 0.25.0 की जार फ़ाइल, जावा कार्यक्रम और एंड्रॉयड औज़ार फ़ोल्डर चुनें। एंड्रॉयड स्तर 36, निर्माण औज़ार 35.0.0 और मूल विकास औज़ार 28.2.13676358 स्थापित होने चाहिए।
 
-एंड्रॉयड निर्यात से चुने हुए निर्माण फ़ोल्डर में पूरी परियोजना बनाएँ। विंडोज़ पर निर्माण फ़ोल्डर के मार्ग में अंग्रेज़ी अक्षर और अंक रखें। आपकी संपादित परियोजना हिंदी में रह सकती है। ऐप बनाएँ से परीक्षण पैकेज बनाएँ। उपकरण पर चलाएँ से पैकेज बनाकर चालू एमुलेटर या अधिकृत फ़ोन पर स्थापित करें। एक से अधिक उपकरण होने पर औज़ार में उपकरण की पहचान लिखें। डिफ़ॉल्ट निर्माण स्थान अस्थायी है। रखने योग्य पैकेज की स्थायी प्रति बनाएँ।
+फ़ाइल मेनू से नई फ़ाइल बनाएँ या बाहर की फ़ाइल की प्रति परियोजना में आयात करें। एंड्रॉयड निर्यात से उत्पन्न परियोजना बनाएँ। ऐप बनाएँ से परीक्षण पैकेज बनाएँ। उपकरण पर चलाएँ से पैकेज बनाकर चालू एमुलेटर या अधिकृत फ़ोन पर स्थापित करें। एक से अधिक उपकरण होने पर औज़ार में उपकरण की पहचान लिखें। निर्माण के परिणाम परियोजना के bhash-studio-builds फ़ोल्डर में मिलेंगे।
 
 डेस्कटॉप और वेब लक्ष्य अगले चरण में आएँगे। उन्नत संपादन, चरणबद्ध दोष जाँच और हस्ताक्षरित प्रकाशन अगले चरण के काम हैं।
 '''
@@ -209,6 +209,9 @@ class Studio:
         add(file_menu, "new", "नई परियोजना…", self.new_project, f"<{modifier}-n>", accelerator + "N")
         add(file_menu, "open", "परियोजना खोलें…", self.open_project, f"<{modifier}-o>", accelerator + "O")
         file_menu.add_separator()
+        add(file_menu, "new_file", "नई फ़ाइल…", self.new_file)
+        add(file_menu, "import_file", "फ़ाइल आयात करें…", self.import_file)
+        file_menu.add_separator()
         add(file_menu, "save", "वर्तमान फ़ाइल सहेजें", self.save_current, f"<{modifier}-s>", accelerator + "S")
         add(file_menu, "close_tab", "वर्तमान फ़ाइल बंद करें", self.close_tab, f"<{modifier}-w>", accelerator + "W")
         self.selected_file = tk.StringVar(self.root)
@@ -242,7 +245,7 @@ class Studio:
         for key, (menu, index) in self.menu_items.items():
             if key == "stop":
                 enabled = busy
-            elif key == "files":
+            elif key in {"files", "new_file", "import_file"}:
                 enabled = self.project is not None
             elif key in {"save", "close_tab"}:
                 enabled = self.active is not None and not busy
@@ -405,6 +408,23 @@ class Studio:
         if path is not None:
             self.load(Project.open(path))
 
+    def new_file(self):
+        dialog = Form(self.root, "नई फ़ाइल", [("name", "फ़ाइल का नाम", "")], "बनाएँ")
+        self.root.wait_window(dialog)
+        if dialog.result:
+            filename = dialog.result["name"]
+            self.project.add_file(filename)
+            self.explorer.refresh()
+            self.select_file(filename)
+
+    def import_file(self):
+        path = choose_path(self.root, "आयात करने वाली फ़ाइल चुनें", lambda _path: True)
+        if path is not None:
+            source = LocalPath(path)
+            self.project.add_file(source.name, source)
+            self.explorer.refresh()
+            self.log(f"परियोजना में फ़ाइल की प्रति रखी गई — {source.name}")
+
     def save_current(self):
         if self.active is None:
             raise StudioError("पहले परियोजना की कोई फ़ाइल खोलें।")
@@ -463,13 +483,12 @@ class Studio:
         dialog = Form(self.root, "औज़ार सेटिंग", [("compiler", "आधिकारिक भाष कंपाइलर की जार फ़ाइल", self.tools.compiler),
                       ("java", "जावा कार्यक्रम", self.tools.java),
                       ("sdk", "एंड्रॉयड औज़ार फ़ोल्डर", self.tools.sdk),
-                      ("workspace", "निर्माण फ़ोल्डर — अक्षर और अंकों वाला मार्ग", self.tools.workspace),
                       ("device", "उपकरण की पहचान — वैकल्पिक", self.device)],
-                      paths={"compiler": jar_file, "java": java_program, "sdk": None, "workspace": None})
+                      paths={"compiler": jar_file, "java": java_program, "sdk": None})
         self.root.wait_window(dialog)
         if dialog.result:
             values = dialog.result
-            tools = Toolchain(values["compiler"], values["java"], values["sdk"], values["workspace"])
+            tools = Toolchain(values["compiler"], values["java"], values["sdk"])
             save_settings(self.settings_file, tools, values["device"])
             self.tools = tools
             self.device = values["device"]
@@ -526,6 +545,7 @@ class Studio:
                 if message is None:
                     self.worker = None
                     self.update_menu_state()
+                    self.guard(self.explorer.refresh)
                 else:
                     self.log(message)
         except queue.Empty:

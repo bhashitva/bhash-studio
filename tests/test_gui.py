@@ -9,6 +9,37 @@ from bhash_studio.project import CONFIG, FILES, SOURCE, LAYOUT, LocalPath, Proje
 
 @unittest.skipUnless(os.environ.get("BHASH_STUDIO_GUI_TESTS") == "1", "Enable GUI tests on a desktop session")
 class DesktopTests(unittest.TestCase):
+    def test_new_and_import_file_menus_update_the_project_tree(self):
+        import tkinter as tk
+        from bhash_studio.app import Form, Studio
+
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            project = Project.create(base / "मेरा-ऐप", "परीक्षण ऐप")
+            original = base / "चित्र.bin"
+            original.write_bytes(b"\xff\0")
+            root = tk.Tk()
+            try:
+                studio = Studio(root, project, settings_file=base / "settings.json")
+
+                def name_file():
+                    dialog = next(widget for widget in root.winfo_children() if isinstance(widget, Form))
+                    dialog.entries["name"].insert(0, "सहायक.bhash")
+                    dialog.accept()
+
+                root.after_idle(name_file)
+                menu, index = studio.menu_items["new_file"]
+                menu.invoke(index)
+                self.assertEqual(studio.active, "सहायक.bhash")
+                with patch("bhash_studio.app.choose_path", return_value=str(original)):
+                    menu, index = studio.menu_items["import_file"]
+                    menu.invoke(index)
+                names = {name for name, _ in studio.explorer.entries.values()}
+                self.assertTrue({"सहायक.bhash", original.name} <= names)
+                self.assertEqual((project.root / original.name).read_bytes(), b"\xff\0")
+            finally:
+                root.destroy()
+
     def test_last_project_restores_tabs_and_skips_missing_paths(self):
         import tkinter as tk
         from bhash_studio.app import Studio
@@ -60,7 +91,7 @@ class DesktopTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp:
             settings_file = Path(temp) / "settings.json"
-            tools = Toolchain("औज़ार/भाष.jar", "औज़ार/java", "औज़ार/एंड्रॉयड", "औज़ार/निर्माण")
+            tools = Toolchain("औज़ार/भाष.jar", "औज़ार/java", "औज़ार/एंड्रॉयड")
             root = tk.Tk()
             try:
                 first = Studio(root, tools=tools, settings_file=settings_file, compiler_override="launch.jar")

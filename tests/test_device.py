@@ -108,7 +108,7 @@ class EmulatorTests(unittest.TestCase):
         app_id = properties["bhashApplicationId"]
         device("shell", "am", "force-stop", app_id)
         target = AndroidTarget(tools)
-        run_tool(target.command(["android", "run", str(output), "--device", serial], job),
+        run_tool(target.command(["android", "run", str(output), "--device", serial]),
                  job, env, job / "device-test.log", threading.Event())
         self.assertTrue(device("shell", "pidof", app_id), "The cold-launched app must remain running")
         print("Three emulator instrumentation tests and cold-launch CLI workflow passed", flush=True)
