@@ -1,10 +1,13 @@
 """Browse the filesystem of the open project."""
 
+import tkinter as tk
 from tkinter import ttk
+
+from .project import SCRATCH_DIRECTORY
 
 
 class ProjectTree(ttk.Frame):
-    def __init__(self, parent, open_file, guard):
+    def __init__(self, parent, open_file, guard, new_file, new_folder, import_file):
         super().__init__(parent)
         self.project = None
         self.entries = {}
@@ -23,29 +26,68 @@ class ProjectTree(ttk.Frame):
         self.tree.bind("<<TreeviewOpen>>", lambda _event: guard(lambda: self.expand(self.tree.focus())))
         self.tree.bind("<Double-Button-1>", self.activate)
         self.tree.bind("<Return>", self.activate)
+        self.menu = tk.Menu(self, tearoff=False)
+        self.target = ""
+        for label, action in (("नई फ़ाइल…", new_file), ("नया फ़ोल्डर…", new_folder),
+                              ("फ़ाइल आयात करें…", import_file)):
+            self.menu.add_command(label=label, command=lambda action=action: guard(lambda: action(self.target)))
+        self.tree.bind("<Button-3>", self.popup)
+        self.tree.bind("<Shift-F10>", self.popup)
+        if self.tk.call("tk", "windowingsystem") == "aqua":
+            self.tree.bind("<Control-Button-1>", self.popup)
         self.set_project(None)
 
     def set_project(self, project):
+        self.tree.delete(*self.tree.get_children())
+        self.entries.clear()
         self.project = project
         self.refresh_button.configure(state="normal" if project else "disabled")
         self.refresh()
 
-    def refresh(self):
+    def refresh(self, folder=""):
+        opened = {name for item, (name, directory) in self.entries.items()
+                  if directory and self.tree.item(item, "open")}
+        parts = folder.split("/") if folder else []
+        opened.update("/".join(parts[:end]) for end in range(1, len(parts) + 1))
         self.tree.delete(*self.tree.get_children())
         self.entries.clear()
         if self.project:
             item = self.tree.insert("", "end", text=self.project.root.name, open=True)
-            self.populate(item, self.project.root)
+            self.populate(item, self.project.root, opened)
 
-    def populate(self, item, folder):
-        children = [(path, path.is_dir() and not path.is_symlink()) for path in folder.iterdir()]
+    def populate(self, item, folder, opened=()):
+        children = [(path, path.is_dir() and not path.is_symlink()) for path in folder.iterdir()
+                    if folder != self.project.root or path.name != SCRATCH_DIRECTORY]
         self.tree.delete(*self.tree.get_children(item))
         for path, directory in sorted(children, key=lambda entry: (not entry[1], entry[0].name.casefold())):
             child = self.tree.insert(item, "end", text=path.name)
             relative = path.relative_to(self.project.root).as_posix()
             self.entries[child] = (relative, directory)
-            if directory:
+            if directory and relative in opened:
+                self.tree.item(child, open=True)
+                self.populate(child, path, opened)
+            elif directory:
                 self.tree.insert(child, "end")
+
+    def popup(self, event):
+        if not self.project:
+            return
+        if event.num in (1, 3):
+            item = self.tree.identify_row(event.y)
+            x, y = event.x_root, event.y_root
+        else:
+            item = self.tree.focus()
+            x, y = self.tree.winfo_rootx(), self.tree.winfo_rooty()
+        if item:
+            self.tree.focus(item)
+            self.tree.selection_set(item)
+        name, directory = self.entries.get(item, ("", True))
+        self.target = name if directory else name.rpartition("/")[0]
+        try:
+            self.menu.tk_popup(x, y)
+        finally:
+            self.menu.grab_release()
+        return "break"
 
     def expand(self, item):
         entry = self.entries.get(item)

@@ -26,6 +26,7 @@ LAYOUT = "पर्दा.भाषदृश्य"
 SOURCE = "मुख्य.bhash"
 FILES = (CONFIG, LAYOUT, SOURCE)
 BUILD_DIRECTORY = "bhash-studio-builds"
+SCRATCH_DIRECTORY = ".studio"
 DEFAULT_LAYOUT = '''<पर्दा पहचान="मुख्य" शीर्षक="मेरा पहला ऐप">
   <स्तंभ>
     <पाठ>भाष में आपका स्वागत है</पाठ>
@@ -49,7 +50,7 @@ def atomic_write(file, text):
     temp = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=file.parent, delete=False) as stream:
-            temp = Path(stream.name)
+            temp = LocalPath(stream.name)
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
@@ -128,11 +129,24 @@ class Project:
             raise StudioError("यह फ़ाइल संपादन योग्य पाठ नहीं है या इसका आकार बहुत बड़ा है।")
         return text
 
-    def add_file(self, filename, source=None):
-        if (not filename or filename in {".", "..", BUILD_DIRECTORY}
+    def new_path(self, filename, folder=""):
+        if (not filename or filename in {".", "..", BUILD_DIRECTORY, SCRATCH_DIRECTORY}
                 or Path(filename).name != filename or any(char in filename for char in "/\\:\0")):
-            raise StudioError("परियोजना के लिए केवल नया फ़ाइल नाम लिखें।")
-        destination = self.file(filename)
+            raise StudioError("केवल नया नाम लिखें।")
+        destination = self.file(Path(folder) / filename)
+        if not destination.parent.is_dir():
+            raise StudioError("चुना गया फ़ोल्डर नहीं मिला।")
+        return destination
+
+    def add_folder(self, name, folder=""):
+        destination = self.new_path(name, folder)
+        try:
+            destination.mkdir()
+        except FileExistsError as error:
+            raise StudioError(f"‘{name}’ पहले से मौजूद है।") from error
+
+    def add_file(self, filename, source=None, folder=""):
+        destination = self.new_path(filename, folder)
         try:
             stream = destination.open("xb")
         except FileExistsError as error:

@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -9,6 +10,159 @@ from bhash_studio.project import CONFIG, FILES, SOURCE, LAYOUT, LocalPath, Proje
 
 @unittest.skipUnless(os.environ.get("BHASH_STUDIO_GUI_TESTS") == "1", "Enable GUI tests on a desktop session")
 class DesktopTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows keyboard messages")
+    def test_windows_hindi_keyboard_in_editor_and_form(self):
+        import ctypes as c
+        from ctypes import wintypes as w
+        import tkinter as tk
+        from bhash_studio.app import Form, Studio
+
+        user = c.WinDLL("user32")
+        user.SendMessageW.argtypes = (w.HWND, w.UINT, w.WPARAM, w.LPARAM)
+        user.PostMessageW.argtypes = (w.HWND, w.UINT, w.WPARAM, w.LPARAM)
+        user.GetFocus.restype = w.HWND
+        user.GetKeyboardLayout.argtypes = (w.DWORD,)
+        user.GetKeyboardLayout.restype = w.HKL
+        user.LoadKeyboardLayoutW.argtypes = (w.LPCWSTR, w.UINT)
+        user.LoadKeyboardLayoutW.restype = w.HKL
+        user.ActivateKeyboardLayout.argtypes = (w.HKL, w.UINT)
+        user.ActivateKeyboardLayout.restype = w.HKL
+        root = tk.Tk()
+        original_layout = user.GetKeyboardLayout(0)
+        hindi_layout = user.LoadKeyboardLayoutW("00010439", 0)
+        if hindi_layout:
+            user.ActivateKeyboardLayout(hindi_layout, 0)
+
+        def type_hindi(window, widget):
+            root.update()
+            widget.focus_force()
+            root.update()
+            # Windows focuses the toplevel; Tk's logical focus is the text widget.
+            hwnd = user.GetFocus()
+            self.assertEqual(hwnd, window.winfo_id())
+            self.assertIs(window.focus_get(), widget)
+            for char in "हिंदी":
+                user.SendMessageW(hwnd, 0x0102, ord(char), 0)
+            if hindi_layout and user.GetKeyboardLayout(0) == hindi_layout:
+                # Let the Windows message loop translate a Hindi Traditional key.
+                self.assertTrue(user.PostMessageW(hwnd, 0x0100, ord("K"), 1 | (0x25 << 16)))
+                self.assertTrue(user.PostMessageW(hwnd, 0x0101, ord("K"), 0xc0250001))
+                self.assertTrue(user.PostMessageW(hwnd, 0x0100, 0x20, 1 | (0x39 << 16)))
+                self.assertTrue(user.PostMessageW(hwnd, 0x0101, 0x20, 0xc0390001))
+            else:
+                self.assertTrue(user.PostMessageW(hwnd, 0x0102, ord("क"), 1))
+                user.SendMessageW(hwnd, 0x0100, ord("K"), 1 | (0x25 << 16))
+                self.assertTrue(user.PostMessageW(hwnd, 0x0102, ord(" "), 1))
+            root.update()
+
+        with tempfile.TemporaryDirectory() as temp:
+            try:
+                base = Path(temp)
+                project = Project.create(base / "मेरा-ऐप", "परीक्षा")
+                studio = Studio(root, project, settings_file=base / "settings.json")
+                editor = studio.editor
+                editor.delete("1.0", "end")
+                type_hindi(root, editor)
+                self.assertEqual(editor.get("1.0", "end-1c"), "हिंदीक ")
+                dialog = Form(root, "फ़ाइल", [("name", "नाम", "")])
+                entry = dialog.entries["name"]
+                type_hindi(dialog, entry)
+                self.assertEqual(entry.get(), "हिंदीक ")
+            finally:
+                user.ActivateKeyboardLayout(original_layout, 0)
+                root.destroy()
+
+    def test_dirty_tabs_recover_without_writing_project_files(self):
+        import tkinter as tk
+        from bhash_studio.app import Studio
+        from bhash_studio.errors import StudioError
+
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            project = Project.create(base / "मेरा-ऐप", "परीक्षा")
+            settings = base / "settings.json"
+            original = project.read(SOURCE)
+            project.add_file("टिप्पणी.txt")
+            root = tk.Tk()
+            try:
+                studio = Studio(root, project, settings_file=settings)
+                studio.editor.insert("end", "# अधूरा\n")
+                studio.editor.mark_set("insert", "2.3")
+                studio.select_file("टिप्पणी.txt")
+                studio.editor.insert("end", "अधूरी टिप्पणी")
+                root.update()
+                for x in range(studio.notebook.winfo_width()):
+                    y = next((row for row in range(30)
+                              if studio.notebook.identify(x, row) == "Yantra.close"), None)
+                    if y is not None and studio.notebook.index(f"@{x},{y}") == 1:
+                        break
+                else:
+                    self.fail("The second tab has no close button")
+                studio.notebook.event_generate("<ButtonPress-1>", x=x, y=y)
+                studio.notebook.event_generate("<ButtonRelease-1>", x=x, y=y)
+                self.assertEqual(list(studio.editors), [SOURCE])
+                studio.close()
+                self.assertTrue(studio.closing)
+                self.assertTrue((project.root / ".studio" / "session.json").is_file())
+                self.assertEqual(project.read(SOURCE), original)
+                self.assertEqual(project.read("टिप्पणी.txt"), "")
+            finally:
+                root.destroy()
+
+            project.file(SOURCE).write_text(original + "# external\n", encoding="utf-8")
+            root = tk.Tk()
+            try:
+                studio = Studio(root, settings_file=settings)
+                studio.restore_session()
+                root.update_idletasks()
+                self.assertEqual(list(studio.editors), [SOURCE])
+                self.assertEqual(studio.editor.get("1.0", "end-1c"), original + "# अधूरा\n")
+                self.assertEqual(studio.editor.index("insert"), "2.3")
+                with self.assertRaises(StudioError):
+                    studio.save_current()
+                studio.select_file("टिप्पणी.txt")
+                self.assertEqual(studio.editor.get("1.0", "end-1c"), "अधूरी टिप्पणी")
+                studio.save_current()
+                self.assertEqual(project.read("टिप्पणी.txt"), "अधूरी टिप्पणी")
+            finally:
+                root.destroy()
+
+    def test_explorer_context_menu_creates_and_imports_in_selected_folder(self):
+        import tkinter as tk
+        from bhash_studio.app import Form, Studio
+
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            project = Project.create(base / "मेरा-ऐप", "परीक्षा")
+            original = base / "चित्र.bin"
+            original.write_bytes(b"\xff\0")
+            root = tk.Tk()
+            try:
+                studio = Studio(root, project, settings_file=base / "settings.json")
+                explorer = studio.explorer
+
+                def accept_name(name):
+                    dialog = next(widget for widget in root.winfo_children() if isinstance(widget, Form))
+                    dialog.entries["name"].insert(0, name)
+                    dialog.accept()
+
+                root.after_idle(accept_name, "संसाधन")
+                explorer.menu.invoke(1)
+                root.update()
+                folder = next(item for item, entry in explorer.entries.items() if entry == ("संसाधन", True))
+                _, y, _, height = explorer.tree.bbox(folder)
+                with patch.object(explorer.menu, "tk_popup"):
+                    explorer.tree.event_generate("<Button-3>", x=20, y=y + height // 2)
+                self.assertEqual(explorer.target, "संसाधन")
+                root.after_idle(accept_name, "दृश्य.भाषदृश्य")
+                explorer.menu.invoke(0)
+                self.assertEqual(studio.active, "संसाधन/दृश्य.भाषदृश्य")
+                with patch("bhash_studio.app.choose_path", return_value=str(original)):
+                    explorer.menu.invoke(2)
+                self.assertEqual((project.root / "संसाधन" / original.name).read_bytes(), b"\xff\0")
+            finally:
+                root.destroy()
+
     def test_new_and_import_file_menus_update_the_project_tree(self):
         import tkinter as tk
         from bhash_studio.app import Form, Studio
