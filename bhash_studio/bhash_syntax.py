@@ -1,12 +1,14 @@
 """Lightweight editor tokenization for the Bhash 0.25.0 grammar."""
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 import re
 import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 from unicodedata import normalize
+from zipfile import BadZipFile, ZipFile
 
 from .errors import StudioError
 
@@ -35,11 +37,57 @@ CONSTRUCTS = {
     "लौटाओ": ("लौटाओ ", ";"),
 }
 
+WORD = r"[\w\u0900-\u0903\u093a-\u094f\u0951-\u0957\u0962-\u0963\u200c\u200d]"
 TOKENS = re.compile(
     r'(?P<comment>//[^\r\n]*|/\*[\s\S]*?(?:\*/|\Z))'
     r'|(?P<string>"(?:\\[^\r\n]|[^"\\\r\n])*\\?"?)'
-    r'|(?P<word>[\w\u0900-\u0903\u093a-\u094f\u0951-\u0957\u0962-\u0963\u200c\u200d]+)'
+    rf'|(?P<word>{WORD}+)'
 )
+IMPORT_PREFIX = re.compile(
+    rf"(?:^|;)[ \t]*(?P<keyword>आयात)[ \t]+(?P<root>{WORD}*)"
+    rf"(?:[ \t]*\.[ \t]*(?P<member>{WORD}*))?\Z", re.MULTILINE,
+)
+CORE_IMPORTS = ("गणित", "जेसन", "पाठ्य", "फ़ाइल", "यादृच्छिक", "समय")
+STDLIB_DIRECTORY = "dev/bhash/stdlib/"
+
+
+def standard_imports(compiler):
+    if compiler:
+        try:
+            path = Path(compiler)
+            stat = path.stat()
+            return read_standard_imports(path, stat.st_mtime_ns, stat.st_size) or CORE_IMPORTS
+        except (OSError, BadZipFile, UnicodeError):
+            pass
+    return CORE_IMPORTS
+
+
+@lru_cache(maxsize=4)
+def read_standard_imports(path, modified_ns, size):
+    names = {}
+    with ZipFile(path) as jar:
+        for resource in jar.namelist():
+            if not resource.startswith(STDLIB_DIRECTORY):
+                continue
+            if resource.endswith("-api.txt") or resource == STDLIB_DIRECTORY + "api.txt":
+                lines = jar.read(resource).decode("utf-8").splitlines()
+                declarations = (line.split("|")[0] for line in lines if line.count("|") == 4 and not line.startswith("#"))
+            elif resource.endswith(".bhash"):
+                source = jar.read(resource).decode("utf-8")
+                if not re.search(r"^संकुल\s+मानक\s*;", source, re.MULTILINE):
+                    continue
+                declarations = re.findall(
+                    rf"^सार्वजनिक[ \t]+(?:वर्ग|अनुबंध|अभिलेख|परिगणना)[ \t]+({WORD}+)",
+                    source, re.MULTILINE,
+                )
+            else:
+                continue
+            for name in declarations:
+                names.setdefault(normalize("NFC", name), name)
+    preferred = [normalize("NFC", name) for name in CORE_IMPORTS]
+    return tuple(names[key] for key in preferred if key in names) + tuple(
+        names[key] for key in sorted(names.keys() - set(preferred))
+    )
 
 
 @dataclass(frozen=True)
@@ -49,13 +97,16 @@ class Completion:
     options: tuple[str, ...]
 
 
-def analyze(source, caret=None):
+def analyze(source, caret=None, imports=CORE_IMPORTS):
     """Return keyword ranges and, when requested, prefix matches at the caret."""
     ranges = []
     names = {}
     active = None
+    import_match = IMPORT_PREFIX.search(source, 0, caret) if caret is not None else None
     for token in TOKENS.finditer(source):
         if token.lastgroup != "word":
+            if import_match and token.start() <= import_match.start("keyword") < token.end():
+                import_match = None
             continue
         start, end = token.span()
         word = token.group()
@@ -66,6 +117,21 @@ def analyze(source, caret=None):
             active = (start, end, canonical)
         elif caret is not None and canonical not in KEYWORD_FOR and not word[0].isdigit():
             names.setdefault(canonical, word)
+
+    if import_match:
+        member = import_match["member"]
+        root = normalize("NFC", import_match["root"])
+        if member is None and "मानक".startswith(root):
+            tail = re.match(rf"{WORD}*(?:[ \t]*\.[ \t]*{WORD}*)?", source[caret:])
+            return ranges, Completion(import_match.start("root"), caret + tail.end(),
+                                      tuple("मानक." + name for name in imports))
+        if member is not None and root == "मानक":
+            tail = re.match(rf"{WORD}*", source[caret:]).group()
+            prefix = normalize("NFC", member)
+            current = normalize("NFC", member + tail)
+            options = tuple(name for name in imports
+                            if normalize("NFC", name).startswith(prefix) and normalize("NFC", name) != current)
+            return ranges, Completion(import_match.start("member"), caret + len(tail), options) if options else None
 
     if active is None:
         return ranges, None

@@ -220,7 +220,9 @@ class Studio:
     def open_tab(self, filename):
         frame = ttk.Frame(self.notebook)
         source_mode = Path(filename).suffix == ".bhash"
-        editor = BhashEditor(frame, syntax_check=self.submit_syntax, undo=True, wrap="none", font=("Nirmala UI", 13),
+        editor = BhashEditor(frame, syntax_check=self.submit_syntax,
+                             compiler_path=lambda: self.compiler_override or self.tools.compiler,
+                             undo=True, wrap="none", font=("Nirmala UI", 13),
                              padx=12, pady=12, background="#f7f9fc", foreground="#182d43", insertwidth=2)
         vertical = ttk.Scrollbar(frame, orient="vertical", command=editor.yview)
         horizontal = ttk.Scrollbar(frame, orient="horizontal", command=editor.xview)

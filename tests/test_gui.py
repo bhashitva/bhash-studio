@@ -10,6 +10,24 @@ from bhash_studio.project import CONFIG, FILES, SOURCE, LAYOUT, LocalPath, Proje
 
 @unittest.skipUnless(os.environ.get("BHASH_STUDIO_GUI_TESTS") == "1", "Enable GUI tests on a desktop session")
 class DesktopTests(unittest.TestCase):
+    def test_editor_inserts_a_standard_library_import(self):
+        import tkinter as tk
+        from bhash_studio.editor import BhashEditor
+
+        root = tk.Tk()
+        try:
+            editor = BhashEditor(root)
+            editor.pack()
+            editor.open_buffer("आयात मानक.पा", source_mode=True)
+            editor.mark_set("insert", "end-1c")
+            root.update()
+            editor.refresh(show=True)
+            self.assertEqual(editor.choices.get(0), "पाठ्य")
+            editor.apply_choice(0)
+            self.assertEqual(editor.get("1.0", "end-1c"), "आयात मानक.पाठ्य")
+        finally:
+            root.destroy()
+
     def test_editor_marks_syntax_errors_and_clears_them_after_correction(self):
         from concurrent.futures import Future
         import tkinter as tk

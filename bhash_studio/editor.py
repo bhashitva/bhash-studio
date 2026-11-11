@@ -5,18 +5,19 @@ import re
 import subprocess
 import tkinter as tk
 
-from .bhash_syntax import analyze
+from .bhash_syntax import analyze, standard_imports
 from .errors import StudioError
 
 
 class BhashEditor(tk.Text):
-    def __init__(self, parent, syntax_check=None, **options):
+    def __init__(self, parent, syntax_check=None, compiler_path=None, **options):
         super().__init__(parent, exportselection=False, **options)
         self.source_mode = False
         self.pending = None
         self.suggest_after_edit = False
         self.completion = None
         self.syntax_check = syntax_check
+        self.compiler_path = compiler_path
         self.syntax_status = tk.StringVar(self)
         self.syntax_timer = None
         self.syntax_future = None
@@ -125,7 +126,10 @@ class BhashEditor(tk.Text):
             return
         source = self.get("1.0", "end-1c")
         caret = len(self.get("1.0", "insert")) if show and not self.tag_ranges("sel") else None
-        ranges, completion = analyze(source, caret)
+        if caret is not None and self.compiler_path is not None:
+            ranges, completion = analyze(source, caret, standard_imports(self.compiler_path()))
+        else:
+            ranges, completion = analyze(source, caret)
         line_starts = [0, *(match.end() for match in re.finditer("\n", source))]
 
         def index_at(offset):
@@ -140,7 +144,8 @@ class BhashEditor(tk.Text):
             self.completion = (index_at(completion.start), index_at(completion.end), completion.options)
             self.choices.delete(0, "end")
             self.choices.insert("end", *completion.options)
-            self.choices.configure(height=len(completion.options))
+            self.choices.configure(height=min(8, len(completion.options)))
+            self.choices.yview_moveto(0)
             x, y, _, line_height = cursor
             width = self.choices.winfo_reqwidth()
             height = self.choices.winfo_reqheight()
@@ -166,6 +171,7 @@ class BhashEditor(tk.Text):
         self.choices.selection_clear(0, "end")
         self.choices.selection_set(next_index)
         self.choices.activate(next_index)
+        self.choices.see(next_index)
         return "break"
 
     def choose(self, event):
