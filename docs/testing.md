@@ -6,7 +6,7 @@ Run the core suite from the repository root. It uses the Python standard library
 python -m unittest discover -s tests -v
 ```
 
-On a desktop session, enable the real Tk widget test. It edits, switches buffers, saves, invokes the check button and reopens the project through normal application methods.
+On a desktop session, enable the real Tk widget tests. They edit and switch buffers, invoke Save and Check from the menu bar, and reopen the project. They also verify that the Android menu enables cancellation during a job and restores its normal state afterward.
 
 ```powershell
 $env:BHASH_STUDIO_GUI_TESTS = '1'

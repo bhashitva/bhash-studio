@@ -87,21 +87,7 @@ class Studio:
         self.title.pack(anchor="w", padx=16, pady=(10, 0))
         self.subtitle = ttk.Label(root, text="अपने विचार से अपना ऐप बनाएँ")
         self.subtitle.pack(anchor="w", padx=18, pady=(0, 8))
-        toolbar = ttk.Frame(root)
-        toolbar.pack(fill="x", padx=12)
-        self.buttons = {}
-        actions = [("new", "नई परियोजना", self.new_project), ("open", "खोलें", self.open_project),
-                   ("save", "सहेजें", self.save_current), ("check", "जाँचें", self.validate),
-                   ("export", "एंड्रॉयड निर्यात", lambda: self.start_job("export")),
-                   ("build", "ऐप बनाएँ", lambda: self.start_job("build")),
-                   ("run", "उपकरण पर चलाएँ", lambda: self.start_job("run")),
-                   ("tools", "औज़ार", self.settings), ("help", "सहायता", self.help)]
-        for key, label, command in actions:
-            button = ttk.Button(toolbar, text=label, command=lambda fn=command: self.guard(fn))
-            button.pack(side="left", padx=2)
-            self.buttons[key] = button
-        self.stop = ttk.Button(toolbar, text="रोकें", command=self.cancel.set, state="disabled")
-        self.stop.pack(side="left", padx=2)
+        self.create_menu_bar()
         target_frame = ttk.Frame(root)
         target_frame.pack(fill="x", padx=18, pady=8)
         ttk.Label(target_frame, text="लक्ष्य").pack(side="left")
@@ -142,13 +128,68 @@ class Studio:
         ttk.Label(root, text="कार्य विवरण").pack(anchor="w", padx=18)
         self.output = tk.Text(root, height=5, state="disabled", wrap="word", font=("Nirmala UI", 11), padx=10)
         self.output.pack(fill="x", padx=14, pady=(4, 10))
-        self.editor.bind("<Control-s>", lambda _: self.guard(self.save_current))
         self.editor.bind("<Control-a>", self.select_all)
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.log("नई परियोजना बनाएँ या पहले से बनी परियोजना खोलें।")
         if project:
             self.load(project)
         root.after(100, self.poll)
+
+    def create_menu_bar(self):
+        self.menu_bar = tk.Menu(self.root, tearoff=False)
+        self.menu_items = {}
+        self.root.configure(menu=self.menu_bar)
+        mac = self.root.tk.call("tk", "windowingsystem") == "aqua"
+        modifier = "Command" if mac else "Control"
+        accelerator = "⌘" if mac else "Ctrl+"
+
+        def dropdown(label):
+            menu = tk.Menu(self.menu_bar, tearoff=False)
+            self.menu_bar.add_cascade(label=label, menu=menu)
+            return menu
+
+        def add(menu, key, label, command, shortcut=None, hint=""):
+            menu.add_command(label=label, command=lambda: self.guard(command), accelerator=hint)
+            index = menu.index("end")
+            self.menu_items[key] = (menu, index)
+            if shortcut:
+                def invoke(_event):
+                    menu.invoke(index)
+                    return "break"
+                self.root.bind(shortcut, invoke)
+
+        file_menu = dropdown("फ़ाइल")
+        add(file_menu, "new", "नई परियोजना…", self.new_project, f"<{modifier}-n>", accelerator + "N")
+        add(file_menu, "open", "परियोजना खोलें…", self.open_project, f"<{modifier}-o>", accelerator + "O")
+        file_menu.add_separator()
+        add(file_menu, "save", "वर्तमान फ़ाइल सहेजें", self.save_current, f"<{modifier}-s>", accelerator + "S")
+        file_menu.add_separator()
+        add(file_menu, "exit", "बंद करें", self.close)
+
+        project_menu = dropdown("परियोजना")
+        add(project_menu, "check", "परियोजना जाँचें", self.validate)
+
+        android_menu = dropdown("एंड्रॉयड")
+        add(android_menu, "export", "एंड्रॉयड निर्यात", lambda: self.start_job("export"))
+        add(android_menu, "build", "ऐप बनाएँ", lambda: self.start_job("build"))
+        add(android_menu, "run", "उपकरण पर चलाएँ", lambda: self.start_job("run"))
+        android_menu.add_separator()
+        add(android_menu, "stop", "काम रोकें", self.cancel.set)
+
+        add(dropdown("औज़ार"), "tools", "औज़ार सेटिंग…", self.settings)
+        add(dropdown("सहायता"), "help", "भाष कार्यशाला सहायता", self.help, "<F1>", "F1")
+        self.update_menu_state()
+
+    def update_menu_state(self):
+        busy = self.worker is not None
+        for key, (menu, index) in self.menu_items.items():
+            if key == "stop":
+                enabled = busy
+            elif key in {"save", "check", "export", "build", "run"}:
+                enabled = self.project is not None and not busy
+            else:
+                enabled = not busy or key == "exit"
+            menu.entryconfigure(index, state="normal" if enabled else "disabled")
 
     def guard(self, action):
         try:
@@ -193,6 +234,7 @@ class Studio:
     def load(self, project):
         snapshot = project.snapshot()
         self.project = project
+        self.update_menu_state()
         self.buffers = snapshot
         self.hashes = {name: digest(text) for name, text in snapshot.items()}
         self.active = SOURCE
@@ -281,7 +323,7 @@ class Studio:
         text.configure(state="disabled")
 
     def start_job(self, operation):
-        if self.worker and self.worker.is_alive():
+        if self.worker is not None:
             raise StudioError("पहला कार्य पूरा होने दें या उसे रोकें।")
         self.validate()
         snapshot = self.buffers.copy()
@@ -289,9 +331,6 @@ class Studio:
         tools = self.tools
         device = self.device
         self.cancel.clear()
-        for button in self.buttons.values():
-            button.configure(state="disabled")
-        self.stop.configure(state="normal")
 
         def work():
             try:
@@ -306,15 +345,15 @@ class Studio:
 
         self.worker = threading.Thread(target=work, daemon=True)
         self.worker.start()
+        self.update_menu_state()
 
     def poll(self):
         try:
             while True:
                 message = self.messages.get_nowait()
                 if message is None:
-                    for button in self.buttons.values():
-                        button.configure(state="normal")
-                    self.stop.configure(state="disabled")
+                    self.worker = None
+                    self.update_menu_state()
                 else:
                     self.log(message)
         except queue.Empty:
