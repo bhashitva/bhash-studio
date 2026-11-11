@@ -5,7 +5,7 @@ import re
 import subprocess
 import tkinter as tk
 
-from .bhash_syntax import analyze, standard_imports
+from .bhash_syntax import analyze, standard_library
 from .errors import StudioError
 
 
@@ -127,7 +127,7 @@ class BhashEditor(tk.Text):
         source = self.get("1.0", "end-1c")
         caret = len(self.get("1.0", "insert")) if show and not self.tag_ranges("sel") else None
         if caret is not None and self.compiler_path is not None:
-            ranges, completion = analyze(source, caret, standard_imports(self.compiler_path()))
+            ranges, completion = analyze(source, caret, *standard_library(self.compiler_path()))
         else:
             ranges, completion = analyze(source, caret)
         line_starts = [0, *(match.end() for match in re.finditer("\n", source))]

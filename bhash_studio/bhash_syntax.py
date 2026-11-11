@@ -49,45 +49,75 @@ IMPORT_PREFIX = re.compile(
 )
 CORE_IMPORTS = ("गणित", "जेसन", "पाठ्य", "फ़ाइल", "यादृच्छिक", "समय")
 STDLIB_DIRECTORY = "dev/bhash/stdlib/"
+STDLIB_IMPORT = re.compile(
+    rf"(?<!{WORD})आयात\s+मानक\s*\.\s*({WORD}+)(?:\s+उपनाम\s+({WORD}+))?\s*;"
+)
+MEMBER_PREFIX = re.compile(rf"(?<!{WORD})({WORD}+)\s*\.\s*({WORD}*)\Z")
+LIBRARY_DECLARATION = re.compile(
+    rf"{TOKENS.pattern}|(?P<brace>[{{}}])"
+)
+LIBRARY_TYPE = re.compile(rf"सार्वजनिक\s+(?:वर्ग|अनुबंध|अभिलेख|परिगणना)\s+({WORD}+)")
+LIBRARY_METHOD = re.compile(rf"सार्वजनिक\s+साझा\s+(?:असमकालिक\s+)?(?:फलन|कार्य)\s+({WORD}+)")
 
 
 def standard_imports(compiler):
+    return standard_library(compiler)[0]
+
+
+def standard_library(compiler):
     if compiler:
         try:
             path = Path(compiler)
             stat = path.stat()
-            return read_standard_imports(path, stat.st_mtime_ns, stat.st_size) or CORE_IMPORTS
+            imports, methods = read_standard_library(path, stat.st_mtime_ns, stat.st_size)
+            return imports or CORE_IMPORTS, methods
         except (OSError, BadZipFile, UnicodeError):
             pass
-    return CORE_IMPORTS
+    return CORE_IMPORTS, {}
 
 
 @lru_cache(maxsize=4)
-def read_standard_imports(path, modified_ns, size):
+def read_standard_library(path, modified_ns, size):
     names = {}
+    methods = {}
+
+    def add(owner, method=None):
+        key = normalize("NFC", owner)
+        names.setdefault(key, owner)
+        if method:
+            methods.setdefault(key, {}).setdefault(normalize("NFC", method), method)
+
     with ZipFile(path) as jar:
         for resource in jar.namelist():
             if not resource.startswith(STDLIB_DIRECTORY):
                 continue
             if resource.endswith("-api.txt") or resource == STDLIB_DIRECTORY + "api.txt":
                 lines = jar.read(resource).decode("utf-8").splitlines()
-                declarations = (line.split("|")[0] for line in lines if line.count("|") == 4 and not line.startswith("#"))
+                for line in lines:
+                    if line.count("|") == 4 and not line.startswith("#"):
+                        owner, method, *_ = line.split("|")
+                        add(owner, method)
             elif resource.endswith(".bhash"):
                 source = jar.read(resource).decode("utf-8")
                 if not re.search(r"^संकुल\s+मानक\s*;", source, re.MULTILINE):
                     continue
-                declarations = re.findall(
-                    rf"^सार्वजनिक[ \t]+(?:वर्ग|अनुबंध|अभिलेख|परिगणना)[ \t]+({WORD}+)",
-                    source, re.MULTILINE,
-                )
-            else:
-                continue
-            for name in declarations:
-                names.setdefault(normalize("NFC", name), name)
+                depth, owner = 0, None
+                for token in LIBRARY_DECLARATION.finditer(source):
+                    if token.lastgroup == "brace":
+                        depth += 1 if token[0] == "{" else -1
+                        if depth == 0:
+                            owner = None
+                    elif token.lastgroup == "word" and token[0] == "सार्वजनिक":
+                        if depth == 0 and (declaration := LIBRARY_TYPE.match(source, token.start())):
+                            owner = declaration[1]
+                            add(owner)
+                        elif depth == 1 and owner and (method := LIBRARY_METHOD.match(source, token.start())):
+                            add(owner, method[1])
     preferred = [normalize("NFC", name) for name in CORE_IMPORTS]
-    return tuple(names[key] for key in preferred if key in names) + tuple(
+    imports = tuple(names[key] for key in preferred if key in names) + tuple(
         names[key] for key in sorted(names.keys() - set(preferred))
     )
+    return imports, {owner: tuple(sorted(entries.values())) for owner, entries in methods.items()}
 
 
 @dataclass(frozen=True)
@@ -97,14 +127,17 @@ class Completion:
     options: tuple[str, ...]
 
 
-def analyze(source, caret=None, imports=CORE_IMPORTS):
+def analyze(source, caret=None, imports=CORE_IMPORTS, methods=None):
     """Return keyword ranges and, when requested, prefix matches at the caret."""
     ranges = []
     names = {}
     active = None
+    excluded = []
     import_match = IMPORT_PREFIX.search(source, 0, caret) if caret is not None else None
     for token in TOKENS.finditer(source):
         if token.lastgroup != "word":
+            if caret is not None and token.start() < caret:
+                excluded.append(token.span())
             if import_match and token.start() <= import_match.start("keyword") < token.end():
                 import_match = None
             continue
@@ -133,6 +166,11 @@ def analyze(source, caret=None, imports=CORE_IMPORTS):
                             if normalize("NFC", name).startswith(prefix) and normalize("NFC", name) != current)
             return ranges, Completion(import_match.start("member"), caret + len(tail), options) if options else None
 
+    if caret is not None and methods:
+        completion = complete_member(source, caret, methods, excluded)
+        if completion:
+            return ranges, completion
+
     if active is None:
         return ranges, None
     start, end, current = active
@@ -143,6 +181,29 @@ def analyze(source, caret=None, imports=CORE_IMPORTS):
                if key.startswith(prefix) and key != current)
     options = [word for _, word in sorted(matches, key=lambda item: (len(item[0]), item[0]))[:6]]
     return ranges, Completion(start, end, tuple(options)) if options else None
+
+
+def complete_member(source, caret, methods, excluded):
+    match = MEMBER_PREFIX.search(source, 0, caret)
+    if not match or source[:match.start()].rstrip().endswith("."):
+        return None
+
+    def is_code(offset):
+        return not any(start <= offset < end for start, end in excluded)
+
+    if not is_code(match.start()):
+        return None
+    receiver = normalize("NFC", match[1])
+    owner = next((normalize("NFC", item[1]) for item in STDLIB_IMPORT.finditer(source, 0, match.start())
+                  if is_code(item.start()) and normalize("NFC", item[2] or item[1]) == receiver), None)
+    if owner is None:
+        return None
+    tail = re.match(rf"{WORD}*", source[caret:]).group()
+    prefix = normalize("NFC", match[2])
+    current = normalize("NFC", match[2] + tail)
+    options = tuple(name for name in methods.get(owner, ())
+                    if normalize("NFC", name).startswith(prefix) and normalize("NFC", name) != current)
+    return Completion(match.start(2), caret + len(tail), options) if options else None
 
 
 def check_syntax(tools, source):
