@@ -24,7 +24,7 @@ HELP = '''भाष यंत्र में आपका स्वागत �
 
 परियोजना.भाषविन्यास में नाम, लक्ष्य और अनुमतियाँ हैं। सत्य, असत्य और रिक्त भाष के मूल मान हैं। ऐप की पहचान बनाए रखें, ताकि उसके अद्यतन उसी ऐप पर लगें।
 
-पर्दा.भाषदृश्य में स्तंभ, पंक्ति, पाठ और बटन लिखें। बटन का दबानेपर गुण मुख्य.bhash के फलन का नाम है। इस प्रारूप में बटन का फलन एक पाठ लेता है और एक पाठ लौटाता है। उसका उत्तर ऐप में नीचे दिखाई देता है।
+पर्दा.भाषदृश्य में स्तंभ, पंक्ति, पाठ, प्रविष्टि और बटन लिखें। प्रविष्टि और परिणाम दिखाने वाले पाठ को अलग पहचान दें। बटन के इनपुटसे में प्रविष्टि की पहचान और परिणाममें में पाठ की पहचान लिखें। दबानेपर वाला फलन मुख्य.bhash में एक पाठ लेता है और एक पाठ लौटाता है।
 
 सहेजें से खुली फ़ाइल सहेजें। फ़ाइल बदलने पर आपकी अधूरी लिखावट बनी रहती है। जाँचें और निर्माण के समय सभी फ़ाइलें सहेजी जाती हैं। बाहर बदली गई फ़ाइल मिलने पर अपनी लिखावट की प्रति बनाकर परियोजना फिर खोलें।
 
@@ -324,6 +324,14 @@ class Studio:
                     render(child, frame, "left" if node.kind == "पंक्ति" else "top")
             elif node.kind == "पाठ":
                 tk.Label(parent, text=node.text, font=("Nirmala UI", 13), bg="white", wraplength=330).pack(side=side, anchor="w", pady=8)
+            elif node.kind == "प्रविष्टि":
+                field = tk.Frame(parent, bg="white")
+                field.pack(side=side, anchor="w", pady=8)
+                ttk.Label(field, text=node.text).pack(anchor="w")
+                entry = ttk.Entry(field, font=("Nirmala UI", 13))
+                entry.insert(0, node.initial)
+                entry.configure(state="readonly")
+                entry.pack(anchor="w")
             else:
                 ttk.Button(parent, text=node.text, state="disabled").pack(side=side, anchor="w", padx=4, pady=8)
 

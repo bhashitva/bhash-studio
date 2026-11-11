@@ -13,7 +13,7 @@ Bhash Yantra is a general application development environment with an Android ad
 | `android.py` | Generate Kotlin/Compose and exports, then invoke the existing Bhash Android CLI |
 | `app.py` | Hindi desktop UI, editor buffers, preview and background-job presentation |
 
-The preview and generator consume the same screen model. The preview renders structure and labels only. The Android host dispatches button events through generated Kotlin/JNI bindings to a real Bhash function. Bhash executes on its runtime worker. The Compose coroutine is lifecycle-bound and preserves cancellation. The result text survives ordinary configuration recreation with `rememberSaveable`.
+The preview and generator consume the same typed screen model. The preview shows authored structure, labels and initial input values. The Android host captures the input value at the moment of the click and dispatches the text action through generated Kotlin/JNI bindings to a real Bhash function on its runtime worker. The lifecycle-bound Compose coroutine writes the returned text to the authored target. Each identified input and text result has independent `rememberSaveable` state. The legacy shared result is generated only for buttons that still use it.
 
 The prototype bridge accepts handlers with one `पाठ` argument and a `पाठ` result. The full Bhash compiler checks source semantics during an Android build. The editor's check command validates configuration, layout and the handler signature shape. It does not implement a second Bhash compiler. Future type-aware editing should use the existing Bhash language server.
 

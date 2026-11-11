@@ -14,7 +14,7 @@ import uuid
 import xml.etree.ElementTree as ET
 
 from .errors import StudioError
-from .layout import handlers
+from .layout import handlers, walk
 from .project import CONFIG, LAYOUT, SOURCE, LocalPath as Path, atomic_write
 from .targets import require_android, validate_snapshot
 
@@ -33,6 +33,17 @@ def kotlin_text(text):
 
 def generate_activity(screen):
     bindings = {name: f"bhash_studio_action_{index}" for index, name in enumerate(handlers(screen))}
+    components = [node for node in walk(screen.content) if node.identity is not None]
+    state = {node.identity: f"textState{index}" for index, node in enumerate(components)}
+    actions = [node for node in walk(screen.content) if node.action]
+    button_tags = {id(node): f"action:{index}" for index, node in enumerate(actions)}
+    legacy_status = any(node.action.result_id is None for node in actions)
+    declarations = []
+    for node in components:
+        initial = node.initial if node.kind == "प्रविष्टि" else node.text
+        declarations.append(f"var {state[node.identity]} by rememberSaveable {{ mutableStateOf({kotlin_text(initial)}) }}")
+    if legacy_status:
+        declarations.append('var status by rememberSaveable { mutableStateOf("") }')
 
     def emit(node, indent):
         pad = " " * indent
@@ -41,17 +52,35 @@ def generate_activity(screen):
             body = "\n".join(emit(child, indent + 4) for child in node.children)
             return f"{pad}{component} {{\n{body}\n{pad}}}"
         if node.kind == "पाठ":
-            return pad + f"Text({kotlin_text(node.text)})"
-        call = f"BhashBindings.{bindings[node.handler]}({kotlin_text(node.argument)})"
-        return f'''{pad}Button(enabled = !busy, onClick = {{
+            if node.identity is None:
+                return pad + f"Text({kotlin_text(node.text)})"
+            return pad + f"Text({state[node.identity]}, modifier = Modifier.testTag({kotlin_text('text:' + node.identity)}))"
+        if node.kind == "प्रविष्टि":
+            value = state[node.identity]
+            return f'''{pad}OutlinedTextField(
+{pad}    value = {value}, onValueChange = {{ {value} = it }},
+{pad}    label = {{ Text({kotlin_text(node.text)}) }}, singleLine = true,
+{pad}    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+{pad}    modifier = Modifier.testTag({kotlin_text("input:" + node.identity)})
+{pad})'''
+        action = node.action
+        argument = kotlin_text(action.literal)
+        snapshot = ""
+        if action.input_id is not None:
+            snapshot = f"{pad}    val input = {state[action.input_id]}\n"
+            argument = "input"
+        result = state[action.result_id] if action.result_id is not None else "status"
+        call = f"BhashBindings.{bindings[action.handler]}({argument})"
+        return f'''{pad}Button(modifier = Modifier.testTag({kotlin_text(button_tags[id(node)])}), enabled = !busy, onClick = {{
+{snapshot}{pad}    busy = true
+{pad}    error = ""
 {pad}    scope.launch {{
-{pad}        busy = true
 {pad}        try {{
-{pad}            status = BhashRuntime.onWorker {{ {call} }}
+{pad}            {result} = BhashRuntime.onWorker {{ {call} }}
 {pad}        }} catch (cancelled: CancellationException) {{
 {pad}            throw cancelled
 {pad}        }} catch (_: Exception) {{
-{pad}            status = "कार्य पूरा नहीं हो सका। फिर प्रयास करें।"
+{pad}            error = "कार्य पूरा नहीं हो सका। फिर प्रयास करें।"
 {pad}        }} finally {{
 {pad}            busy = false
 {pad}        }}
@@ -66,11 +95,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -81,14 +113,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            var status by rememberSaveable { mutableStateOf("") }
+''' + "".join(f"            {line}\n" for line in declarations) + '''
+            var error by remember { mutableStateOf("") }
             var busy by remember { mutableStateOf(false) }
             val scope = rememberCoroutineScope()
             MaterialTheme {
                 Surface(Modifier.fillMaxSize()) {
                     Column(Modifier.padding(24.dp).verticalScroll(rememberScrollState())) {
-''' + f"                        Text({kotlin_text(screen.title)}, style = MaterialTheme.typography.headlineMedium)\n" + emit(screen.content, 24) + '''
-                        Text(status)
+''' + f"                        Text({kotlin_text(screen.title)}, style = MaterialTheme.typography.headlineMedium)\n" + emit(screen.content, 24) + (
+        "\n                        Text(status)" if legacy_status else ""
+    ) + '''
+                        if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
@@ -104,41 +139,57 @@ def generate_exports(screen):
 
 def generate_device_tests(screen):
     """Generate tests for the authored screen, replacing the upstream hello fixture."""
-    buttons = []
-
-    def visit(node):
-        if node.handler:
-            buttons.append(node)
-        for child in node.children:
-            visit(child)
-
-    visit(screen.content)
+    buttons = [node for node in walk(screen.content) if node.action]
     action_tests = ""
     if buttons:
+        index = next((i for i, node in enumerate(buttons) if node.action.input_id is not None), 0)
+        action = buttons[index].action
+        binding = handlers(screen).index(action.handler)
+        setup = ""
+        repeat = ""
+        if action.input_id is not None:
+            field = kotlin_text("input:" + action.input_id)
+            setup = f'''
+        val input = compose.onNodeWithTag({field})
+        val originalInput = argument("inputBase64")
+        input.performScrollTo().performTextReplacement(originalInput)
+        input.performImeAction()'''
+            repeat = f'''
+            input.performScrollTo().assertTextContains(originalInput)
+            val changedInput = argument("unicodeArgumentBase64")
+            input.performTextReplacement(changedInput)
+            input.performImeAction()
+            click()
+            awaitResult(argument("unicodeResultBase64"))'''
+        target = kotlin_text("text:" + action.result_id) if action.result_id is not None else "null"
         action_tests = '''
     @Test fun actionSurvivesRotationAndRecreation() {
         val expected = argument("expectedResultBase64")
         val original = compose.activity.requestedOrientation
-        compose.onAllNodes(hasText(@BUTTON@) and hasClickAction()).onFirst().performClick()
-        awaitText(expected)
+        fun click() { compose.onNodeWithTag(@BUTTON@).performScrollTo().performClick() }
+        fun awaitResult(value: String) { awaitText(value, @TARGET@) }
+@SETUP@
+        click()
+        awaitResult(expected)
         try {
             compose.activityRule.scenario.onActivity {
                 it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             }
             awaitOrientation(Configuration.ORIENTATION_LANDSCAPE)
-            awaitText(expected)
+            awaitResult(expected)
             compose.activityRule.scenario.onActivity {
                 it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             }
             awaitOrientation(Configuration.ORIENTATION_PORTRAIT)
-            awaitText(expected)
+            awaitResult(expected)
             compose.activityRule.scenario.recreate()
-            awaitText(expected)
+            awaitResult(expected)
             repeat(3) {
-                compose.onAllNodes(hasText(@BUTTON@) and hasClickAction()).onFirst().performClick()
+                click()
                 compose.waitForIdle()
-                awaitText(expected)
+                awaitResult(expected)
             }
+@REPEAT@
         } finally {
             compose.activityRule.scenario.onActivity { it.requestedOrientation = original }
         }
@@ -149,11 +200,12 @@ def generate_device_tests(screen):
         val expected = argument("unicodeResultBase64")
         runBlocking {
             BhashRuntime.onWorker {
-                repeat(40) { assertEquals(expected, BhashBindings.bhash_studio_action_0(value)) }
+                repeat(40) { assertEquals(expected, BhashBindings.bhash_studio_action_@BINDING@(value)) }
             }
         }
     }
-'''.replace("@BUTTON@", kotlin_text(buttons[0].text))
+'''.replace("@BUTTON@", kotlin_text(f"action:{index}")).replace("@TARGET@", target).replace(
+            "@SETUP@", setup).replace("@REPEAT@", repeat).replace("@BINDING@", str(binding))
     return '''// Generated by Bhash Studio from the authored screen.
 package org.bhashitva.androidstarter
 
@@ -193,11 +245,12 @@ class StudioScreenTest {
         return String(Base64.decode(encoded!!, Base64.DEFAULT), Charsets.UTF_8)
     }
 
-    private fun awaitText(text: String) {
+    private fun awaitText(text: String, target: String? = null) {
+        val matcher = if (target == null) hasText(text) else hasTestTag(target) and hasText(text)
         compose.waitUntil(15_000) {
-            runCatching { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false)
+            runCatching { compose.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false)
         }
-        compose.onAllNodesWithText(text).onFirst().assertIsDisplayed()
+        compose.onAllNodes(matcher).onFirst().performScrollTo().assertIsDisplayed()
     }
 
     private fun awaitOrientation(orientation: Int) {

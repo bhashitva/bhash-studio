@@ -83,6 +83,7 @@ class EmulatorTests(unittest.TestCase):
         atomic_write(test, generate_device_tests(screen))
         expected = {
             "expectedResultBase64": "नमस्ते, दुनिया!",
+            "inputBase64": "दुनिया",
             "unicodeArgumentBase64": "क़ क्ष ज्ञ 😀",
             "unicodeResultBase64": "नमस्ते, क़ क्ष ज्ञ 😀!",
         }
