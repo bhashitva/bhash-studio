@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from bhash_studio.project import SOURCE, LAYOUT, Project
+from bhash_studio.project import FILES, SOURCE, LAYOUT, Project
 
 
 @unittest.skipUnless(os.environ.get("BHASH_STUDIO_GUI_TESTS") == "1", "Enable GUI tests on a desktop session")
@@ -19,8 +19,12 @@ class DesktopTests(unittest.TestCase):
                 app = Studio(root, project)
                 root.update()
                 app.editor.insert("end", "\n// हिंदी टिप्पणी\n")
-                app.select_file(LAYOUT)
-                app.select_file(SOURCE)
+                file_menu, index = app.menu_items["files"]
+                picker = root.nametowidget(file_menu.entrycget(index, "menu"))
+                picker.invoke(FILES.index(LAYOUT))
+                self.assertEqual(app.active, LAYOUT)
+                self.assertTrue(app.helpers[0].instate(["disabled"]))
+                picker.invoke(FILES.index(SOURCE))
                 self.assertIn("हिंदी टिप्पणी", app.editor.get("1.0", "end"))
                 for key in ("save", "check"):
                     menu, index = app.menu_items[key]
@@ -29,6 +33,45 @@ class DesktopTests(unittest.TestCase):
                 self.assertIn("हिंदी टिप्पणी", Project.open(project.root).read(SOURCE))
                 self.assertIn("जाँच सफल", app.output.get("1.0", "end"))
                 self.assertEqual(len(app.preview.winfo_children()), 2)
+            finally:
+                root.destroy()
+
+    def test_bhash_editor_highlights_and_completes_from_the_active_buffer(self):
+        import tkinter as tk
+        from bhash_studio.app import Studio
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = tk.Tk()
+            try:
+                app = Studio(root, Project.create(Path(temp) / "परियोजना", "अभिवादन"))
+                editor = app.editor
+                editor.open_buffer('लिखो("🙂 यदि"); मान परिणाम: पाठ = "";\n', True)
+                editor.focus_force()
+                root.update()
+                editor.mark_set("insert", "end-1c")
+                editor.insert("insert", "परि")
+                done = tk.BooleanVar(root)
+                root.after(240, lambda: done.set(True))
+                root.wait_variable(done)
+                ranges = editor.tag_ranges("keyword")
+                self.assertEqual([editor.get(a, b) for a, b in zip(ranges[::2], ranges[1::2])],
+                                 ["लिखो", "मान", "पाठ"])
+                self.assertIn("परिणाम", editor.choices.get(0, "end"))
+                self.assertTrue(editor.choices.winfo_ismapped())
+                choice = editor.choices.get(0, "end").index("परिणाम")
+                editor.choices.selection_clear(0, "end")
+                editor.choices.selection_set(choice)
+                editor.event_generate("<Tab>")
+                self.assertEqual(editor.get("insert linestart", "insert"), "परिणाम")
+                self.assertFalse(editor.choices.winfo_ismapped())
+
+                editor.insert("insert", "\n    ")
+                constructs = root.nametowidget(app.helpers[1].cget("menu"))
+                index = next(i for i in range(constructs.index("end") + 1)
+                             if constructs.entrycget(i, "label") == "यदि")
+                constructs.invoke(index)
+                self.assertIn("    यदि (सत्य) {\n        \n    }", editor.get("1.0", "end-1c"))
+                self.assertEqual(editor.get("insert linestart", "insert"), "        ")
             finally:
                 root.destroy()
 
@@ -44,6 +87,7 @@ class DesktopTests(unittest.TestCase):
             root = tk.Tk()
             try:
                 app = Studio(root)
+                root.update_idletasks()
                 build, build_index = app.menu_items["build"]
                 stop, stop_index = app.menu_items["stop"]
                 self.assertEqual(str(root.cget("menu")), str(app.menu_bar))

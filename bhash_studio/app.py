@@ -8,13 +8,15 @@ import tkinter as tk
 from tkinter import ttk
 
 from .android import AndroidTarget, Toolchain
-from .config import loads
+from .bhash_syntax import COMMON_KEYWORDS, CONSTRUCTS
+from .editor import BhashEditor
 from .errors import StudioError
-from .project import CONFIG, FILES, LAYOUT, SOURCE, Project, digest
-from .targets import TARGETS, validate_snapshot
+from .project import FILES, SOURCE, Project, digest
+from .targets import validate_snapshot
 
 
-HELP = '''भाष विकासशाला में आपका स्वागत है
+APP_NAME = "भाष यंत्र"
+HELP = '''भाष यंत्र में आपका स्वागत है
 
 नई परियोजना के लिए ऐप का नाम और एक नए फ़ोल्डर का पूरा मार्ग लिखें। पहले से बनी परियोजना खोलने के लिए उसका फ़ोल्डर लिखें।
 
@@ -23,6 +25,8 @@ HELP = '''भाष विकासशाला में आपका स्व
 पर्दा.भाषदृश्य में स्तंभ, पंक्ति, पाठ और बटन लिखें। बटन का दबानेपर गुण मुख्य.bhash के फलन का नाम है। इस प्रारूप में बटन का फलन एक पाठ लेता है और एक पाठ लौटाता है। उसका उत्तर ऐप में नीचे दिखाई देता है।
 
 सहेजें से खुली फ़ाइल सहेजें। फ़ाइल बदलने पर आपकी अधूरी लिखावट बनी रहती है। जाँचें और निर्माण के समय सभी फ़ाइलें सहेजी जाती हैं। बाहर बदली गई फ़ाइल मिलने पर अपनी लिखावट की प्रति बनाकर परियोजना फिर खोलें।
+
+फ़ाइल → फ़ाइल बदलें से लिखने वाली फ़ाइल चुनें। मुख्य.bhash में शब्द डालें और रचना डालें से लिखावट जोड़ें। भाष के आरक्षित शब्द बैंगनी रंग में दिखाई देते हैं। लिखते समय नीचे और ऊपर के तीर से सुझाव चुनें। टैब या एंटर से उसे डालें और एस्केप से सूची बंद करें।
 
 पूर्वावलोकन केवल दृश्य की बनावट दिखाता है। बटन का भाष फलन उपकरण पर चलता है। पूरी भाष जाँच निर्माण के समय कंपाइलर करता है।
 
@@ -75,45 +79,30 @@ class Studio:
         self.cancel = threading.Event()
         self.worker = None
         self.closing = False
-        root.title("भाष विकासशाला")
+        root.title(APP_NAME)
         root.geometry("1280x820")
         root.minsize(920, 620)
         style = ttk.Style(root)
         style.theme_use("clam")
         style.configure("TLabel", font=("Nirmala UI", 11))
         style.configure("TButton", font=("Nirmala UI", 11), padding=6)
-        style.configure("Header.TLabel", font=("Nirmala UI", 21, "bold"), foreground="#193a59")
-        self.title = ttk.Label(root, text="भाष विकासशाला", style="Header.TLabel")
-        self.title.pack(anchor="w", padx=16, pady=(10, 0))
-        self.subtitle = ttk.Label(root, text="अपने विचार से अपना ऐप बनाएँ")
-        self.subtitle.pack(anchor="w", padx=18, pady=(0, 8))
         self.create_menu_bar()
-        target_frame = ttk.Frame(root)
-        target_frame.pack(fill="x", padx=18, pady=8)
-        ttk.Label(target_frame, text="लक्ष्य").pack(side="left")
-        self.target_labels = []
-        for target in TARGETS:
-            text = target.name + (" — उपलब्ध" if target.implemented else " — आगामी")
-            label = ttk.Label(target_frame, text=text)
-            label.pack(side="left", padx=18)
-            self.target_labels.append(label)
         panes = ttk.Panedwindow(root, orient="horizontal")
         panes.pack(fill="both", expand=True, padx=14)
         left = ttk.Frame(panes)
         right = ttk.Frame(panes)
         panes.add(left, weight=3)
         panes.add(right, weight=2)
-        tabs = ttk.Frame(left)
-        tabs.pack(fill="x")
-        self.tabs = {}
-        for filename in FILES:
-            button = ttk.Button(tabs, text=filename, command=lambda name=filename: self.select_file(name))
-            button.pack(side="left", padx=2)
-            self.tabs[filename] = button
+        helpers = ttk.Frame(left)
+        helpers.pack(fill="x", pady=(6, 0))
         editor_frame = ttk.Frame(left)
         editor_frame.pack(fill="both", expand=True, pady=6)
-        self.editor = tk.Text(editor_frame, undo=True, wrap="none", font=("Nirmala UI", 13),
-                              padx=12, pady=12, background="#f7f9fc", foreground="#182d43", insertwidth=2)
+        self.editor = BhashEditor(editor_frame, undo=True, wrap="none", font=("Nirmala UI", 13),
+                                  padx=12, pady=12, background="#f7f9fc", foreground="#182d43", insertwidth=2)
+        self.helpers = [
+            self.insertion_menu(helpers, "शब्द डालें", ((word, (word, "")) for word in COMMON_KEYWORDS)),
+            self.insertion_menu(helpers, "रचना डालें", CONSTRUCTS.items()),
+        ]
         scroll = ttk.Scrollbar(editor_frame, orient="vertical", command=self.editor.yview)
         horizontal = ttk.Scrollbar(editor_frame, orient="horizontal", command=self.editor.xview)
         self.editor.configure(yscrollcommand=scroll.set, xscrollcommand=horizontal.set)
@@ -122,7 +111,6 @@ class Studio:
         self.editor.grid(row=0, column=0, sticky="nsew")
         scroll.grid(row=0, column=1, sticky="ns")
         horizontal.grid(row=1, column=0, sticky="ew")
-        ttk.Label(right, text="दृश्य पूर्वावलोकन — केवल बनावट").pack(anchor="w", pady=7)
         self.preview = tk.Frame(right, background="#ffffff", padx=20, pady=20)
         self.preview.pack(fill="both", expand=True, padx=(12, 0), pady=6)
         ttk.Label(root, text="कार्य विवरण").pack(anchor="w", padx=18)
@@ -133,7 +121,17 @@ class Studio:
         self.log("नई परियोजना बनाएँ या पहले से बनी परियोजना खोलें।")
         if project:
             self.load(project)
-        root.after(100, self.poll)
+        self.poll_timer = root.after(100, self.poll)
+        root.bind("<Destroy>", self.stop_polling)
+
+    def insertion_menu(self, parent, label, entries):
+        button = ttk.Menubutton(parent, text=label, state="disabled")
+        menu = tk.Menu(button, tearoff=False)
+        for name, parts in entries:
+            menu.add_command(label=name, command=lambda parts=parts: self.editor.insert_helper(*parts))
+        button.configure(menu=menu)
+        button.pack(side="left", padx=(0, 6))
+        return button
 
     def create_menu_bar(self):
         self.menu_bar = tk.Menu(self.root, tearoff=False)
@@ -163,6 +161,15 @@ class Studio:
         add(file_menu, "open", "परियोजना खोलें…", self.open_project, f"<{modifier}-o>", accelerator + "O")
         file_menu.add_separator()
         add(file_menu, "save", "वर्तमान फ़ाइल सहेजें", self.save_current, f"<{modifier}-s>", accelerator + "S")
+        self.selected_file = tk.StringVar(self.root)
+        file_picker = tk.Menu(file_menu, tearoff=False)
+        for filename in FILES:
+            file_picker.add_radiobutton(
+                label=filename, value=filename, variable=self.selected_file,
+                command=lambda name=filename: self.select_file(name),
+            )
+        file_menu.add_cascade(label="फ़ाइल बदलें", menu=file_picker)
+        self.menu_items["files"] = (file_menu, file_menu.index("end"))
         file_menu.add_separator()
         add(file_menu, "exit", "बंद करें", self.close)
 
@@ -177,7 +184,7 @@ class Studio:
         add(android_menu, "stop", "काम रोकें", self.cancel.set)
 
         add(dropdown("औज़ार"), "tools", "औज़ार सेटिंग…", self.settings)
-        add(dropdown("सहायता"), "help", "भाष कार्यशाला सहायता", self.help, "<F1>", "F1")
+        add(dropdown("सहायता"), "help", "भाष यंत्र सहायता", self.help, "<F1>", "F1")
         self.update_menu_state()
 
     def update_menu_state(self):
@@ -185,6 +192,8 @@ class Studio:
         for key, (menu, index) in self.menu_items.items():
             if key == "stop":
                 enabled = busy
+            elif key == "files":
+                enabled = self.project is not None
             elif key in {"save", "check", "export", "build", "run"}:
                 enabled = self.project is not None and not busy
             else:
@@ -214,14 +223,19 @@ class Studio:
             self.buffers[self.active] = self.editor.get("1.0", "end-1c")
 
     def select_file(self, filename):
-        if not self.project:
+        if not self.project or filename == self.active:
             return
         self.remember()
         self.active = filename
-        self.editor.delete("1.0", "end")
-        self.editor.insert("1.0", self.buffers[filename])
-        self.editor.edit_reset()
-        self.subtitle.configure(text=f"{self.project.root} — {filename}")
+        self.show_active_file()
+
+    def show_active_file(self):
+        self.selected_file.set(self.active)
+        self.root.title(f"{APP_NAME} — {self.active}")
+        source_mode = self.active == SOURCE
+        self.editor.open_buffer(self.buffers[self.active], source_mode)
+        for helper in self.helpers:
+            helper.configure(state="normal" if source_mode else "disabled")
 
     def confirm_leave(self):
         self.remember()
@@ -238,10 +252,7 @@ class Studio:
         self.buffers = snapshot
         self.hashes = {name: digest(text) for name, text in snapshot.items()}
         self.active = SOURCE
-        self.editor.delete("1.0", "end")
-        self.editor.insert("1.0", snapshot[SOURCE])
-        self.editor.edit_reset()
-        self.subtitle.configure(text=str(project.root))
+        self.show_active_file()
         self.log("परियोजना खोल दी गई।")
         self.guard(self.refresh_preview)
 
@@ -316,7 +327,7 @@ class Studio:
 
     def help(self):
         window = tk.Toplevel(self.root)
-        window.title("भाष विकासशाला सहायता")
+        window.title(f"{APP_NAME} सहायता")
         text = tk.Text(window, wrap="word", width=80, height=30, font=("Nirmala UI", 12), padx=16, pady=16)
         text.pack(fill="both", expand=True)
         text.insert("1.0", HELP)
@@ -348,6 +359,7 @@ class Studio:
         self.update_menu_state()
 
     def poll(self):
+        self.root.after_cancel(self.poll_timer)
         try:
             while True:
                 message = self.messages.get_nowait()
@@ -361,7 +373,11 @@ class Studio:
         if self.closing and (not self.worker or not self.worker.is_alive()):
             self.root.destroy()
             return
-        self.root.after(100, self.poll)
+        self.poll_timer = self.root.after(100, self.poll)
+
+    def stop_polling(self, event):
+        if event.widget is self.root:
+            self.root.after_cancel(self.poll_timer)
 
     def close(self):
         if not self.confirm_leave():
@@ -371,7 +387,7 @@ class Studio:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="भाष विकासशाला")
+    parser = argparse.ArgumentParser(description=APP_NAME)
     parser.add_argument("--project", help="परियोजना फ़ोल्डर")
     parser.add_argument("--compiler", help="भाष कंपाइलर की जार फ़ाइल")
     options = parser.parse_args()

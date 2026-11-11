@@ -1,6 +1,6 @@
-# Bhash Studio architecture
+# Bhash Yantra architecture
 
-Bhash Studio is a general application development environment with an Android adapter first. The app developer authors Bhash and Hindi project files. The prototype implementation uses Python 3.11 and Tk so it runs without third-party Python dependencies. This bootstrap shell is a provisional implementation choice. Evaluate complex-script input, accessibility, large files and editor integration before committing to the production shell. The original roadmap proposed an Electron and Monaco evaluation.
+Bhash Yantra is a general application development environment with an Android adapter first. The app developer authors Bhash and Hindi project files. The prototype implementation uses Python 3.11 and Tk so it runs without third-party Python dependencies. This bootstrap shell is a provisional implementation choice. Evaluate complex-script input, accessibility, large files and editor integration before committing to the production shell. The original roadmap proposed an Electron and Monaco evaluation.
 
 ## Boundaries
 
