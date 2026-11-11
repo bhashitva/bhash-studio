@@ -9,6 +9,39 @@ from bhash_studio.project import CONFIG, FILES, SOURCE, LAYOUT, LocalPath, Proje
 
 @unittest.skipUnless(os.environ.get("BHASH_STUDIO_GUI_TESTS") == "1", "Enable GUI tests on a desktop session")
 class DesktopTests(unittest.TestCase):
+    def test_tool_settings_are_restored_on_next_launch(self):
+        import tkinter as tk
+        from bhash_studio.android import Toolchain
+        from bhash_studio.app import Form, Studio
+
+        with tempfile.TemporaryDirectory() as temp:
+            settings_file = Path(temp) / "settings.json"
+            tools = Toolchain("औज़ार/भाष.jar", "औज़ार/java", "औज़ार/एंड्रॉयड", "औज़ार/निर्माण")
+            root = tk.Tk()
+            try:
+                first = Studio(root, tools=tools, settings_file=settings_file, compiler_override="launch.jar")
+
+                def apply_settings():
+                    dialog = next(widget for widget in root.winfo_children() if isinstance(widget, Form))
+                    dialog.entries["device"].insert(0, "emulator-5554")
+                    dialog.accept()
+
+                root.after_idle(apply_settings)
+                menu, index = first.menu_items["tools"]
+                menu.invoke(index)
+                self.assertTrue(settings_file.is_file())
+            finally:
+                root.destroy()
+
+            root = tk.Tk()
+            try:
+                second = Studio(root, tools=Toolchain(), settings_file=settings_file)
+                root.update_idletasks()
+                self.assertEqual(second.tools, tools)
+                self.assertEqual(second.device, "emulator-5554")
+            finally:
+                root.destroy()
+
     def test_help_menu_opens_and_closes_read_only_help(self):
         import tkinter as tk
         from bhash_studio.app import Studio

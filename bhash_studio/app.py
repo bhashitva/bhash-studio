@@ -1,6 +1,7 @@
 """Small, dependency-free desktop prototype. All developer-facing text is Hindi."""
 
 import argparse
+from dataclasses import replace
 from pathlib import Path
 import queue
 from textwrap import fill
@@ -16,6 +17,7 @@ from .errors import StudioError
 from .path_picker import choose_path, jar_file, java_program
 from .project import CONFIG, FILES, SOURCE, Project, digest
 from .project_tree import ProjectTree
+from .settings import load_settings, save_settings, settings_path
 from .targets import validate_snapshot
 
 
@@ -87,7 +89,7 @@ class Form(tk.Toplevel):
 
 
 class Studio:
-    def __init__(self, root, project=None, tools=None):
+    def __init__(self, root, project=None, tools=None, settings_file=None, compiler_override=None):
         self.root = root
         self.project = None
         self.buffers = {}
@@ -96,6 +98,13 @@ class Studio:
         self.editors = {}
         self.tools = tools or Toolchain.discover()
         self.device = ""
+        self.settings_file = settings_file if settings_file is not None else settings_path()
+        settings_error = None
+        try:
+            self.tools, self.device = load_settings(self.settings_file, self.tools)
+        except StudioError as error:
+            settings_error = str(error)
+        self.compiler_override = compiler_override
         self.messages = queue.Queue()
         self.cancel = threading.Event()
         self.worker = None
@@ -134,6 +143,8 @@ class Studio:
         self.output.pack(fill="x", padx=14, pady=(4, 10))
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.log("नई परियोजना बनाएँ या पहले से बनी परियोजना खोलें।")
+        if settings_error:
+            self.log(settings_error)
         if project:
             self.load(project)
         self.poll_timer = root.after(100, self.poll)
@@ -415,9 +426,11 @@ class Studio:
         self.root.wait_window(dialog)
         if dialog.result:
             values = dialog.result
-            self.tools = Toolchain(values["compiler"], values["java"], values["sdk"], values["workspace"])
+            tools = Toolchain(values["compiler"], values["java"], values["sdk"], values["workspace"])
+            save_settings(self.settings_file, tools, values["device"])
+            self.tools = tools
             self.device = values["device"]
-            self.log("इस सत्र के औज़ार सेट कर दिए गए।")
+            self.log("औज़ार सेटिंग सहेज दी गई। अगली बार भी यही सेटिंग उपयोग में आएगी।")
 
     def help(self):
         window = tk.Toplevel(self.root)
@@ -443,7 +456,7 @@ class Studio:
         self.validate()
         snapshot = {name: self.buffers[name] for name in FILES}
         project = self.project
-        tools = self.tools
+        tools = replace(self.tools, compiler=self.compiler_override) if self.compiler_override else self.tools
         device = self.device
         self.cancel.clear()
 
@@ -495,11 +508,8 @@ def main():
     parser.add_argument("--project", help="परियोजना फ़ोल्डर")
     parser.add_argument("--compiler", help="भाष कंपाइलर की जार फ़ाइल")
     options = parser.parse_args()
-    tools = Toolchain.discover()
-    if options.compiler:
-        tools = Toolchain(options.compiler, tools.java, tools.sdk, tools.workspace)
     root = tk.Tk()
-    studio = Studio(root, tools=tools)
+    studio = Studio(root, compiler_override=options.compiler)
     if options.project:
         studio.guard(lambda: studio.load(Project.open(options.project)))
     root.mainloop()
