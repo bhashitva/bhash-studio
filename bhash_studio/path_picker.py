@@ -6,6 +6,7 @@ import string
 import tkinter as tk
 from tkinter import ttk
 
+from .clipboard import enable_clipboard
 from .project import LocalPath
 
 
@@ -39,7 +40,9 @@ class PathPicker(tk.Toplevel):
         if os.name == "nt":
             self.add_drives(navigation)
         self.location = tk.StringVar(self)
-        ttk.Entry(self, state="readonly", textvariable=self.location).pack(fill="x", padx=8)
+        location = ttk.Entry(self, state="readonly", textvariable=self.location)
+        enable_clipboard(location)
+        location.pack(fill="x", padx=8)
 
         contents = ttk.Frame(self, padding=8)
         contents.pack(fill="both", expand=True)

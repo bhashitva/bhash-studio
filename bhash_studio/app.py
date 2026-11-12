@@ -14,12 +14,13 @@ import webbrowser
 
 from .android import AndroidTarget, Toolchain
 from .bhash_syntax import COMMON_KEYWORDS, CONSTRUCTS, check_syntax
+from .clipboard import COMMANDS, ReadOnlyText, clipboard_action, enable_clipboard
 from .config import loads
 from .editor import BhashEditor
 from .errors import StudioError
 from .keyboard import enable_hindi_input
 from .path_picker import choose_path, jar_file, java_program
-from .project import CONFIG, FILES, SOURCE, LocalPath, Project, digest
+from .project import BUILD_DIRECTORY, CONFIG, FILES, SOURCE, LocalPath, Project, digest
 from .project_tree import ProjectTree
 from .settings import (load_project_session, load_session, load_settings,
                        save_project_session, save_session, save_settings, settings_path)
@@ -57,6 +58,8 @@ HELP = '''भाष यंत्र में आपका स्वागत �
 
 पूर्वावलोकन केवल दृश्य की बनावट दिखाता है। बटन का भाष फलन उपकरण पर चलता है। पूरी भाष जाँच निर्माण के समय कंपाइलर करता है।
 
+संपादन मेनू या दाएँ क्लिक से पाठ की प्रतिलिपि बनाएँ और संपादन योग्य स्थान पर चिपकाएँ। त्रुटि, फलन सहायता और कार्य विवरण से भी पाठ चुनकर प्रतिलिपि बना सकते हैं। पुराने पैकेज और निर्माण विवरण हटाने के लिए bhash-studio-builds पर दायाँ क्लिक करके पूर्व निर्माण हटाओ चुनें।
+
 औज़ार में आधिकारिक भाष कंपाइलर 0.25.0 की जार फ़ाइल, जावा कार्यक्रम और एंड्रॉयड औज़ार फ़ोल्डर चुनें। एंड्रॉयड स्तर 36, निर्माण औज़ार 35.0.0 और मूल विकास औज़ार 28.2.13676358 स्थापित होने चाहिए।
 
 फ़ाइल मेनू से नई फ़ाइल बनाएँ या बाहर की फ़ाइल की प्रति परियोजना में आयात करें। एंड्रॉयड निर्यात से उत्पन्न परियोजना बनाएँ। ऐप बनाएँ से परीक्षण पैकेज बनाएँ। उपकरण पर चलाएँ से पैकेज बनाकर चालू एमुलेटर या अधिकृत फ़ोन पर स्थापित करें। एक से अधिक उपकरण होने पर औज़ार में उपकरण की पहचान लिखें। निर्माण के परिणाम परियोजना के bhash-studio-builds फ़ोल्डर में मिलेंगे।
@@ -79,6 +82,7 @@ class Form(tk.Toplevel):
         for index, (key, label, value) in enumerate(fields):
             ttk.Label(self, text=label).grid(row=index, column=0, padx=12, pady=8, sticky="w")
             entry = ttk.Entry(self, width=65)
+            enable_clipboard(entry)
             entry.insert(0, value)
             entry.grid(row=index, column=1, padx=12, pady=8, sticky="ew")
             self.entries[key] = entry
@@ -149,7 +153,8 @@ class Studio:
         panes = ttk.Panedwindow(root, orient="horizontal")
         panes.pack(fill="both", expand=True, padx=14)
         self.explorer = ProjectTree(panes, self.select_file, self.guard,
-                                    self.new_file, self.new_folder, self.import_file, self.trash_files)
+                                    self.new_file, self.new_folder, self.import_file, self.trash_files,
+                                    self.cleanup_builds)
         self.explorer.configure(width=240)
         panes.add(self.explorer, weight=0)
         left = ttk.Frame(panes)
@@ -172,7 +177,7 @@ class Studio:
         self.preview = tk.Frame(right, background="#ffffff", padx=20, pady=20)
         self.preview.pack(fill="both", expand=True, padx=(12, 0), pady=6)
         ttk.Label(root, text="कार्य विवरण").pack(anchor="w", padx=18)
-        self.output = tk.Text(root, height=5, state="disabled", wrap="word", font=("Nirmala UI", 11), padx=10)
+        self.output = ReadOnlyText(root, height=5, wrap="word", font=("Nirmala UI", 11), padx=10)
         self.output.pack(fill="x", padx=14, pady=(4, 10))
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.log("नई परियोजना बनाएँ या पहले से बनी परियोजना खोलें।")
@@ -235,13 +240,28 @@ class Studio:
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
         editor.grid(row=0, column=0, sticky="nsew")
+        enable_clipboard(editor)
         vertical.grid(row=0, column=1, sticky="ns")
         horizontal.grid(row=1, column=0, sticky="ew")
         if source_mode:
-            status = ttk.Label(frame, textvariable=editor.syntax_status, width=1)
+            status = ReadOnlyText(frame, height=3, width=1, wrap="word", relief="flat",
+                                  background=ttk.Style(frame).lookup("TFrame", "background"),
+                                  font=("Nirmala UI", 11))
             status.grid(row=2, column=0, sticky="ew")
-            self.add_signature_panel(frame, editor, status)
-        editor.bind("<Control-a>", self.select_all)
+            status.grid_remove()
+
+            def update_status(*_):
+                value = editor.syntax_status.get()
+                status.set_text(value)
+                if value:
+                    status.configure(height=3 if len(value) > 120 else 1)
+                    status.grid()
+                else:
+                    status.grid_remove()
+
+            trace = editor.syntax_status.trace_add("write", update_status)
+            status.bind("<Destroy>", lambda _: editor.syntax_status.trace_remove("write", trace))
+            self.add_signature_panel(frame, editor)
         state = self.file_states.get(filename, {})
         editor.open_buffer(state.get("text", self.buffers[filename]), source_mode)
         cursor = state.get("cursor")
@@ -262,11 +282,13 @@ class Studio:
         buffers = {name: self.file_text(name) for name in self.editors if name.endswith(".bhash")}
         return self.signature_pool.submit(self.language_server.help, tools, self.project, filename, buffers, caret, site)
 
-    def add_signature_panel(self, frame, editor, status):
+    def add_signature_panel(self, frame, editor):
         panel = ttk.Frame(frame, padding=(6, 4))
         panel.grid(row=3, column=0, sticky="ew")
         panel.columnconfigure(0, weight=1)
-        text = ttk.Label(panel, justify="left", width=1)
+        text = ReadOnlyText(panel, width=1, height=3, wrap="word", relief="flat",
+                            background=ttk.Style(frame).lookup("TFrame", "background"),
+                            font=("Nirmala UI", 11))
         text.grid(row=0, column=0, sticky="ew")
         link = ttk.Button(panel, text="GitHub संदर्भ")
         link.grid(row=1, column=0, sticky="w")
@@ -283,7 +305,8 @@ class Studio:
                 lines.append(f"वर्तमान मापदंड — {help.parameter}")
             if help.description:
                 lines.append(help.description)
-            text.configure(text="\n".join(lines))
+            text.set_text("\n".join(lines))
+            text.configure(height=min(8, len(lines) + bool(help.description)))
             if help.url:
                 link.configure(command=lambda: webbrowser.open(help.url))
                 link.grid()
@@ -291,12 +314,7 @@ class Studio:
                 link.grid_remove()
             panel.grid()
 
-        def wrap(event):
-            status.configure(wraplength=event.width)
-            text.configure(wraplength=max(1, event.width - 12))
-
         editor.signature_display = display
-        editor.bind("<Configure>", wrap)
 
     def restore_view(self, editor, state):
         editor.unbind("<Map>")
@@ -358,6 +376,11 @@ class Studio:
         file_menu.add_separator()
         add(file_menu, "exit", "बंद करें", self.close)
 
+        edit_menu = dropdown("संपादन")
+        for action, label, key in COMMANDS:
+            edit_menu.add_command(label=label, accelerator=accelerator + key.upper(),
+                                  command=lambda action=action: clipboard_action(self.root.focus_get(), action))
+
         project_menu = dropdown("परियोजना")
         add(project_menu, "check", "परियोजना जाँचें", self.validate)
 
@@ -402,10 +425,6 @@ class Studio:
         self.output.insert("end", text + "\n")
         self.output.see("end")
         self.output.configure(state="disabled")
-
-    def select_all(self, _):
-        self.editor.tag_add("sel", "1.0", "end-1c")
-        return "break"
 
     def file_text(self, filename):
         editor = self.editors.get(filename)
@@ -638,6 +657,41 @@ class Studio:
             self.persist_project(list(self.editors), self.active)
             self.log(f"{count} फ़ाइलें कूड़ेदान में भेज दी गईं।")
 
+    def cleanup_builds(self):
+        if not self.project or self.closing:
+            return
+        if self.worker is not None:
+            raise StudioError("निर्माण हटाने से पहले चल रहा काम पूरा होने दें या उसे रोकें।")
+        project = self.project
+        names = project.previous_builds()
+        if not names:
+            self.log("हटाने के लिए कोई पूर्व निर्माण नहीं मिला।")
+            return
+        if not messagebox.askokcancel(
+            "पूर्व निर्माण हटाओ",
+            f"{len(names)} पूर्व निर्माण स्थायी रूप से हटाएँ? उनके पैकेज और कार्य विवरण भी हटेंगे।",
+            parent=self.root, default=messagebox.CANCEL, icon=messagebox.WARNING,
+        ):
+            return
+        prefixes = tuple(f"{BUILD_DIRECTORY}/{name}/" for name in names)
+        for filename in list(self.editors):
+            if filename.startswith(prefixes):
+                self.close_tab(filename)
+
+        def cleanup():
+            removed = 0
+            for name in names:
+                if self.cancel.is_set():
+                    break
+                try:
+                    if project.remove_build(name):
+                        removed += 1
+                except (OSError, StudioError) as error:
+                    self.messages.put(f"निर्माण नहीं हट सका — {name}\n{error}")
+            self.messages.put(f"{removed} पूर्व निर्माण हटाए गए।")
+
+        self.start_worker(cleanup)
+
     def save_current(self):
         if self.active is None:
             raise StudioError("पहले परियोजना की कोई फ़ाइल खोलें।")
@@ -683,6 +737,7 @@ class Studio:
                 field.pack(side=side, anchor="w", pady=8)
                 ttk.Label(field, text=node.text).pack(anchor="w")
                 entry = ttk.Entry(field, font=("Nirmala UI", 13))
+                enable_clipboard(entry)
                 entry.insert(0, node.initial)
                 entry.configure(state="readonly")
                 entry.pack(anchor="w")
@@ -721,16 +776,15 @@ class Studio:
         window.transient(self.root)
         window.bind("<Escape>", lambda _event: window.destroy())
         # Use explicit line breaks instead of Tk's native wrapped layout for long Hindi paragraphs.
-        text = tk.Text(window, wrap="none", width=80, height=30, font=("Nirmala UI", 12), padx=16, pady=16)
+        text = ReadOnlyText(window, wrap="none", width=80, height=30, font=("Nirmala UI", 12), padx=16, pady=16)
         vertical = ttk.Scrollbar(window, orient="vertical", command=text.yview)
         horizontal = ttk.Scrollbar(window, orient="horizontal", command=text.xview)
         text.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
         vertical.pack(side="right", fill="y")
         horizontal.pack(side="bottom", fill="x")
         text.pack(fill="both", expand=True)
-        text.insert("1.0", "\n\n".join(fill(paragraph, width=76, break_long_words=False, break_on_hyphens=False)
-                                       for paragraph in HELP.strip().split("\n\n")))
-        text.configure(state="disabled")
+        text.set_text("\n\n".join(fill(paragraph, width=76, break_long_words=False, break_on_hyphens=False)
+                                  for paragraph in HELP.strip().split("\n\n")))
         text.focus_set()
 
     def start_job(self, operation):
@@ -740,8 +794,6 @@ class Studio:
         project = self.project
         tools = replace(self.tools, compiler=self.compiler_override) if self.compiler_override else self.tools
         device = self.device
-        self.cancel.clear()
-
         def work():
             try:
                 result = AndroidTarget(tools).execute(project, snapshot, operation, self.cancel, self.messages.put, device)
@@ -750,6 +802,14 @@ class Studio:
                 self.messages.put(str(error))
             except Exception:
                 self.messages.put("कार्य पूरा नहीं हो सका। फ़ाइल मार्ग और औज़ार सेटिंग जाँचें।")
+        self.start_worker(work)
+
+    def start_worker(self, action):
+        self.cancel.clear()
+
+        def work():
+            try:
+                action()
             finally:
                 self.messages.put(None)
 

@@ -3,11 +3,11 @@
 import tkinter as tk
 from tkinter import ttk
 
-from .project import SCRATCH_DIRECTORY
+from .project import BUILD_DIRECTORY, SCRATCH_DIRECTORY
 
 
 class ProjectTree(ttk.Frame):
-    def __init__(self, parent, open_file, guard, new_file, new_folder, import_file, trash_files):
+    def __init__(self, parent, open_file, guard, new_file, new_folder, import_file, trash_files, cleanup_builds):
         super().__init__(parent)
         self.project = None
         self.entries = {}
@@ -35,6 +35,8 @@ class ProjectTree(ttk.Frame):
         self.menu.add_separator()
         self.menu.add_command(label="चुनी हुई फ़ाइलें कूड़ेदान में भेजें…",
                               command=lambda: guard(lambda: trash_files(self.selected_files())))
+        self.build_menu = tk.Menu(self, tearoff=False)
+        self.build_menu.add_command(label="पूर्व निर्माण हटाओ…", command=lambda: guard(cleanup_builds))
         self.tree.bind("<Button-3>", self.popup)
         self.tree.bind("<Shift-F10>", self.popup)
         if self.tk.call("tk", "windowingsystem") == "aqua":
@@ -112,10 +114,11 @@ class ProjectTree(ttk.Frame):
         name, directory = self.entries.get(item, ("", True))
         self.target = name if directory else name.rpartition("/")[0]
         self.menu.entryconfigure("end", state="normal" if self.selected_files() else "disabled")
+        menu = self.build_menu if directory and name == BUILD_DIRECTORY else self.menu
         try:
-            self.menu.tk_popup(x, y)
+            menu.tk_popup(x, y)
         finally:
-            self.menu.grab_release()
+            menu.grab_release()
         return "break"
 
     def expand(self, item):

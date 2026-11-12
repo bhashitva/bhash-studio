@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
 import uuid
@@ -26,6 +27,7 @@ LAYOUT = "पर्दा.भाषदृश्य"
 SOURCE = "मुख्य.bhash"
 FILES = (CONFIG, LAYOUT, SOURCE)
 BUILD_DIRECTORY = "bhash-studio-builds"
+BUILD_ID = re.compile(r"[0-9a-f]{16}")
 SCRATCH_DIRECTORY = ".studio"
 DEFAULT_LAYOUT = '''<पर्दा पहचान="मुख्य" शीर्षक="मेरा पहला ऐप">
   <स्तंभ>
@@ -177,6 +179,29 @@ class Project:
         files = {filename: self.read(filename) for filename in FILES}
         files.update(self.source_snapshot({SOURCE: files[SOURCE]}))
         return files
+
+    def previous_builds(self):
+        directory = self.file(BUILD_DIRECTORY)
+        if not directory.is_dir():
+            return []
+        return sorted(path.name for path in directory.iterdir()
+                      if BUILD_ID.fullmatch(path.name) and self.is_build_output(path))
+
+    @staticmethod
+    def is_build_output(path):
+        return (path.is_dir() and not path.is_symlink() and path.resolve() == path
+                and any((path / marker).is_file() for marker in ("tool-output.log", "build-inputs.json", "compiler.jar")))
+
+    def remove_build(self, name):
+        if not BUILD_ID.fullmatch(name):
+            raise StudioError("निर्माण फ़ोल्डर का नाम अमान्य है।")
+        path = self.file(Path(BUILD_DIRECTORY) / name)
+        if not path.exists():
+            return False
+        if not self.is_build_output(path):
+            raise StudioError("निर्माण फ़ोल्डर का मार्ग बदल गया है।")
+        shutil.rmtree(path)
+        return True
 
     def source_snapshot(self, overlays):
         files = dict(overlays)

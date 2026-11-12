@@ -10,6 +10,84 @@ from bhash_studio.project import CONFIG, FILES, SOURCE, LAYOUT, LocalPath, Proje
 
 @unittest.skipUnless(os.environ.get("BHASH_STUDIO_GUI_TESTS") == "1", "Enable GUI tests on a desktop session")
 class DesktopTests(unittest.TestCase):
+    def test_build_folder_context_menu_confirms_and_removes_previous_builds(self):
+        import tkinter as tk
+        from bhash_studio.app import Studio
+        from bhash_studio.project import BUILD_DIRECTORY, Project
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = tk.Tk()
+            try:
+                project = Project.create(Path(temp) / "demo", "परीक्षा")
+                output = project.root / BUILD_DIRECTORY
+                old = output / "0123456789abcdef"
+                old.mkdir(parents=True)
+                (old / "app.apk").write_bytes(b"test")
+                (old / "tool-output.log").write_text("build", encoding="utf-8")
+                (output / "abcdef0123456789").mkdir()
+                keep = output / "notes.txt"
+                keep.write_text("keep", encoding="utf-8")
+                studio = Studio(root, project, settings_file=Path(temp) / "settings.json")
+                root.update()
+                tree = studio.explorer
+                folder = next(item for item, entry in tree.entries.items() if entry == (BUILD_DIRECTORY, True))
+                _, y, _, height = tree.tree.bbox(folder)
+                with patch.object(tree.build_menu, "tk_popup") as popup:
+                    tree.tree.event_generate("<Button-3>", x=40, y=y + height // 2)
+                    popup.assert_called_once()
+                with patch("bhash_studio.app.messagebox.askokcancel", return_value=False):
+                    tree.build_menu.invoke(0)
+                self.assertTrue(old.is_dir())
+                with patch("bhash_studio.app.messagebox.askokcancel", return_value=True):
+                    tree.build_menu.invoke(0)
+                studio.worker.join(timeout=5)
+                studio.poll()
+                self.assertFalse(old.exists())
+                self.assertTrue(keep.exists())
+                self.assertTrue((output / "abcdef0123456789").is_dir())
+                self.assertTrue(output.is_dir())
+                self.assertIn("1 पूर्व निर्माण हटाए गए", studio.output.get("1.0", "end"))
+            finally:
+                root.destroy()
+
+    def test_clipboard_copies_diagnostics_and_pastes_into_editor_and_form(self):
+        import tkinter as tk
+        from bhash_studio.app import Form, Studio
+        from bhash_studio.clipboard import ReadOnlyText
+        from bhash_studio.project import Project
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = tk.Tk()
+            try:
+                project = Project.create(Path(temp) / "demo", "परीक्षा")
+                studio = Studio(root, project, settings_file=Path(temp) / "settings.json")
+                editor = studio.editor
+                message = "पंक्ति २ — फलन चाहिए"
+                editor.syntax_status.set(message)
+                status = next(child for child in editor.master.winfo_children() if isinstance(child, ReadOnlyText))
+                root.update()
+                status.event_generate("<<SelectAll>>")
+                status.event_generate("<<Copy>>")
+                self.assertEqual(root.clipboard_get(), message)
+                editor.event_generate("<<SelectAll>>")
+                editor.event_generate("<<Paste>>")
+                self.assertEqual(editor.get("1.0", "end-1c"), message)
+                studio.log(message)
+                studio.output.tag_add("sel", "end-2l", "end-1l -1c")
+                studio.output.event_generate("<<Copy>>")
+                self.assertEqual(root.clipboard_get(), message)
+                form = Form(root, "नाम", [("name", "नाम", "पुराना")])
+                entry = form.entries["name"]
+                entry.event_generate("<<SelectAll>>")
+                entry.event_generate("<<Paste>>")
+                self.assertEqual(entry.get(), message)
+                entry.configure(state="readonly")
+                entry.event_generate("<<SelectAll>>")
+                entry.event_generate("<<Cut>>")
+                self.assertEqual(entry.get(), message)
+            finally:
+                root.destroy()
+
     def test_editor_inserts_a_standard_library_import(self):
         import tkinter as tk
         from bhash_studio.editor import BhashEditor
