@@ -20,12 +20,13 @@ from .editor import BhashEditor
 from .errors import StudioError
 from .keyboard import enable_hindi_input
 from .path_picker import choose_path, jar_file, java_program
-from .project import BUILD_DIRECTORY, CONFIG, FILES, SOURCE, LocalPath, Project, digest
+from .project import BUILD_DIRECTORY, CONFIG, FILES, SOURCE, WEB_FILES, WEB_PROFILES, LocalPath, Project, digest, project_files
 from .project_tree import ProjectTree
 from .settings import (load_project_session, load_session, load_settings,
                        save_project_session, save_session, save_settings, settings_path)
 from .targets import validate_snapshot
 from .signature_help import LanguageServer
+from .web import DEFAULT_PROFILES, WebTarget, validate_profiles, validate_web
 
 
 APP_NAME = "भाष यंत्र"
@@ -69,7 +70,7 @@ HELP = '''भाष यंत्र में आपका स्वागत �
 
 
 class Form(tk.Toplevel):
-    def __init__(self, parent, title, fields, action="स्वीकार करें", paths=None):
+    def __init__(self, parent, title, fields, action="स्वीकार करें", paths=None, choices=None):
         super().__init__(parent)
         enable_hindi_input(self)
         self.title(title)
@@ -81,9 +82,13 @@ class Form(tk.Toplevel):
         self.paths = paths or {}
         for index, (key, label, value) in enumerate(fields):
             ttk.Label(self, text=label).grid(row=index, column=0, padx=12, pady=8, sticky="w")
-            entry = ttk.Entry(self, width=65)
+            if choices and key in choices:
+                entry = ttk.Combobox(self, width=62, values=choices[key], state="readonly")
+                entry.set(value)
+            else:
+                entry = ttk.Entry(self, width=65)
+                entry.insert(0, value)
             enable_clipboard(entry)
-            entry.insert(0, value)
             entry.grid(row=index, column=1, padx=12, pady=8, sticky="ew")
             self.entries[key] = entry
             if key in self.paths:
@@ -123,6 +128,7 @@ class Studio:
         enable_hindi_input(root)
         self.project = None
         self.buffers = {}
+        self.web_port = None
         self.hashes = {}
         self.active = None
         self.editors = {}
@@ -366,13 +372,8 @@ class Studio:
         add(file_menu, "save", "वर्तमान फ़ाइल सहेजें", self.save_current, f"<{modifier}-s>", accelerator + "S")
         add(file_menu, "close_tab", "वर्तमान फ़ाइल बंद करें", self.close_tab, f"<{modifier}-w>", accelerator + "W")
         self.selected_file = tk.StringVar(self.root)
-        file_picker = tk.Menu(file_menu, tearoff=False)
-        for filename in FILES:
-            file_picker.add_radiobutton(
-                label=filename, value=filename, variable=self.selected_file,
-                command=lambda name=filename: self.guard(lambda: self.select_file(name)),
-            )
-        file_menu.add_cascade(label="फ़ाइल बदलें", menu=file_picker)
+        self.file_picker = tk.Menu(file_menu, tearoff=False)
+        file_menu.add_cascade(label="फ़ाइल बदलें", menu=self.file_picker)
         self.menu_items["files"] = (file_menu, file_menu.index("end"))
         file_menu.add_separator()
         add(file_menu, "exit", "बंद करें", self.close)
@@ -392,26 +393,54 @@ class Studio:
         android_menu.add_separator()
         add(android_menu, "stop", "काम रोकें", self.cancel.set)
 
+        web_menu = dropdown("वेब")
+        add(web_menu, "web_run", "स्थानीय सर्वर चलाएँ", lambda: self.start_web(True))
+        add(web_menu, "web_browser", "ब्राउज़र में खोलें", self.open_web_preview)
+        add(web_menu, "web_export", "तैनाती बंडल बनाएँ…", lambda: self.start_web(False))
+        add(web_menu, "web_stop", "वेब काम रोकें", self.cancel.set)
+
         add(dropdown("औज़ार"), "tools", "औज़ार सेटिंग…", self.settings)
         add(dropdown("सहायता"), "help", "भाष यंत्र सहायता", self.help, "<F1>", "F1")
         self.update_menu_state()
 
     def update_menu_state(self):
         busy = self.worker is not None
+        files = self.required_files()
+        web = files == WEB_FILES
+        ready = all(name in self.buffers for name in files) and not busy
         for key, (menu, index) in self.menu_items.items():
             if key == "stop":
-                enabled = busy
+                enabled = busy and not web
+            elif key == "web_stop":
+                enabled = busy and web
+            elif key == "web_browser":
+                enabled = web and busy and self.web_port is not None
+            elif key in {"web_run", "web_export"}:
+                enabled = web and ready
             elif key in {"files", "new_file", "import_file"}:
                 enabled = self.project is not None
             elif key == "close_tab":
                 enabled = self.active is not None
             elif key == "save":
                 enabled = self.active is not None and not busy
-            elif key in {"check", "export", "build", "run"}:
-                enabled = all(name in self.buffers for name in FILES) and not busy
+            elif key == "check":
+                enabled = ready
+            elif key in {"export", "build", "run"}:
+                enabled = not web and ready
             else:
                 enabled = not busy or key == "exit"
             menu.entryconfigure(index, state="normal" if enabled else "disabled")
+
+    def required_files(self):
+        return project_files(self.buffers[CONFIG]) if CONFIG in self.buffers else FILES
+
+    def update_file_picker(self):
+        self.file_picker.delete(0, "end")
+        for filename in self.required_files():
+            self.file_picker.add_radiobutton(
+                label=filename, value=filename, variable=self.selected_file,
+                command=lambda name=filename: self.guard(lambda: self.select_file(name)),
+            )
 
     def guard(self, action):
         try:
@@ -483,7 +512,7 @@ class Studio:
         page = self.editors.pop(filename).master
         self.notebook.forget(page)
         page.destroy()
-        if filename not in FILES:
+        if filename not in self.required_files():
             self.buffers.pop(filename)
             self.hashes.pop(filename)
         if active is not None:
@@ -519,6 +548,7 @@ class Studio:
         self.project = project
         self.buffers = snapshot
         self.hashes = {name: digest(text) for name, text in snapshot.items()}
+        self.update_file_picker()
         self.update_project_title()
         self.guard(lambda: self.explorer.set_project(project))
         self.tab_changed()
@@ -544,7 +574,12 @@ class Studio:
     def open_workspace(self, project, tabs, active):
         snapshot = {}
         missing = set()
-        for filename in FILES:
+        try:
+            snapshot[CONFIG] = project.read(CONFIG)
+        except (StudioError, OSError):
+            missing.add(CONFIG)
+            self.log(f"पिछली परियोजना की आवश्यक फ़ाइल नहीं खुली — {CONFIG}")
+        for filename in project_files(snapshot[CONFIG])[1:] if CONFIG in snapshot else FILES[1:]:
             try:
                 snapshot[filename] = project.read(filename)
             except (StudioError, OSError):
@@ -582,15 +617,32 @@ class Studio:
 
     def new_project(self):
         dialog = Form(self.root, "नई परियोजना", [("name", "ऐप का नाम", "मेरा पहला ऐप"),
+                      ("target", "ऐप का प्रकार", "एंड्रॉयड"),
                       ("folder", "नए फ़ोल्डर का नाम", "मेरा-ऐप"),
                       ("directory", "मूल फ़ोल्डर", str(Path.cwd()))],
-                      "परियोजना बनाएँ", paths={"directory": None})
+                      "आगे बढ़ें", paths={"directory": None}, choices={"target": ("एंड्रॉयड", "वेब")})
         self.root.wait_window(dialog)
         if dialog.result:
             folder = dialog.result["folder"]
             if not folder or folder in {".", ".."} or Path(folder).name != folder or any(c in folder for c in "/\\"):
                 raise StudioError("नए फ़ोल्डर के लिए केवल उसका नाम लिखें। मूल फ़ोल्डर अलग से चुनें।")
-            self.load(Project.create(Path(dialog.result["directory"]) / folder, dialog.result["name"]))
+            target = dialog.result["target"]
+            profiles = None
+            if target == "वेब":
+                profiles_dialog = Form(self.root, "वेब तैनाती परिवेश",
+                                       [(name, f"{name} का पोर्ट", str(profile["port"]))
+                                        for name, profile in DEFAULT_PROFILES.items()],
+                                       "परियोजना बनाएँ")
+                self.root.wait_window(profiles_dialog)
+                if not profiles_dialog.result:
+                    return
+                try:
+                    profiles = {name: {"port": int(value)} for name, value in profiles_dialog.result.items()}
+                except ValueError as error:
+                    raise StudioError("हर परिवेश के लिए पोर्ट संख्या लिखें।") from error
+                validate_profiles(profiles)
+            self.load(Project.create(Path(dialog.result["directory"]) / folder, dialog.result["name"],
+                                     target, profiles))
 
     def open_project(self):
         path = choose_path(self.root, f"‘{CONFIG}’ फ़ाइल चुनें", lambda path: path.name == CONFIG)
@@ -645,11 +697,12 @@ class Studio:
             count += 1
             if name in self.editors:
                 self.forget_tab(name)
+            required = name in self.required_files()
             self.buffers.pop(name, None)
             self.hashes.pop(name, None)
             if "text" not in self.file_states.get(name, {}):
                 self.file_states.pop(name, None)
-            if name in FILES:
+            if required:
                 for widget in self.preview.winfo_children():
                     widget.destroy()
         self.explorer.refresh()
@@ -706,20 +759,30 @@ class Studio:
         self.file_states.pop(filename, None)
         if filename == CONFIG:
             self.update_project_title()
+            self.update_file_picker()
 
     def save_all(self):
         if not self.project:
             raise StudioError("पहले एक परियोजना खोलें।")
-        for name in FILES:
+        files = self.required_files()
+        for name in files:
             self.save_file(name)
         for name in self.editors:
-            if name not in FILES and self.file_text(name) != self.buffers[name]:
+            if name not in files and self.file_text(name) != self.buffers[name]:
                 self.save_file(name)
 
     def refresh_preview(self, snapshot=None):
         if snapshot is None:
             snapshot = self.project.snapshot()
             snapshot.update((name, self.file_text(name)) for name in self.editors if name in snapshot)
+        if project_files(snapshot[CONFIG]) == WEB_FILES:
+            config, _ = validate_web(snapshot)
+            for widget in self.preview.winfo_children():
+                widget.destroy()
+            ttk.Label(self.preview, text=config["नाम"], wraplength=350).pack(anchor="w")
+            ttk.Label(self.preview, text="पूर्वावलोकन के लिए वेब मेनू से स्थानीय सर्वर चलाएँ।",
+                      wraplength=350).pack(anchor="w", pady=8)
+            return
         _, screen = validate_snapshot(snapshot)
         for widget in self.preview.winfo_children():
             widget.destroy()
@@ -751,7 +814,10 @@ class Studio:
         self.save_all()
         snapshot = self.project.snapshot()
         self.refresh_preview(snapshot)
-        self.log("विन्यास, दृश्य और बटन के फलन रूप की जाँच सफल। पूरी भाष जाँच निर्माण में होगी।")
+        if self.required_files() == WEB_FILES:
+            self.log("वेब विन्यास और तैनाती परिवेश की जाँच सफल। पूरी भाष जाँच निर्माण में होगी।")
+        else:
+            self.log("विन्यास, दृश्य और बटन के फलन रूप की जाँच सफल। पूरी भाष जाँच निर्माण में होगी।")
         return snapshot
 
     def settings(self):
@@ -805,6 +871,39 @@ class Studio:
                 self.messages.put("कार्य पूरा नहीं हो सका। फ़ाइल मार्ग और औज़ार सेटिंग जाँचें।")
         self.start_worker(work)
 
+    def start_web(self, run):
+        if self.worker is not None:
+            raise StudioError("पहला कार्य पूरा होने दें या उसे रोकें।")
+        snapshot = self.validate()
+        _, profiles = validate_web(snapshot)
+        project = self.project
+        tools = replace(self.tools, compiler=self.compiler_override) if self.compiler_override else self.tools
+        profile = "dev"
+        if not run:
+            dialog = Form(self.root, "तैनाती बंडल", [("profile", "परिवेश", "staging")],
+                          "बंडल बनाएँ", choices={"profile": tuple(profiles)})
+            self.root.wait_window(dialog)
+            if not dialog.result:
+                return
+            profile = dialog.result["profile"]
+
+        def work():
+            target = WebTarget(tools)
+            try:
+                if run:
+                    target.serve(project, snapshot, self.cancel, self.messages.put, self.messages.put)
+                else:
+                    bundle = target.build(project, snapshot, profile, self.cancel, self.messages.put)
+                    self.messages.put(f"तैनाती बंडल तैयार है — {bundle}")
+            except (StudioError, OSError) as error:
+                self.messages.put(str(error))
+
+        self.start_worker(work)
+
+    def open_web_preview(self):
+        if self.worker is not None and self.web_port is not None:
+            webbrowser.open(f"http://127.0.0.1:{self.web_port}/")
+
     def start_worker(self, action):
         self.cancel.clear()
 
@@ -825,8 +924,12 @@ class Studio:
                 message = self.messages.get_nowait()
                 if message is None:
                     self.worker = None
+                    self.web_port = None
                     self.update_menu_state()
                     self.guard(self.explorer.refresh)
+                elif isinstance(message, int):
+                    self.web_port = message
+                    self.update_menu_state()
                 else:
                     self.log(message)
         except queue.Empty:

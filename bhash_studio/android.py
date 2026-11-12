@@ -308,7 +308,7 @@ def stop_process(process):
     process.communicate()
 
 
-def run_tool(command, cwd, env, log_file, cancel, timeout=900):
+def run_tool(command, cwd, env, log_file, cancel, timeout=900, on_wait=None):
     if cancel.is_set():
         raise StudioError("कार्य रोक दिया गया।")
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
@@ -329,6 +329,12 @@ def run_tool(command, cwd, env, log_file, cancel, timeout=900):
                 process.wait(timeout=0.2)
                 break
             except subprocess.TimeoutExpired:
+                if on_wait is not None:
+                    try:
+                        on_wait()
+                    except Exception:
+                        stop_process(process)
+                        raise
                 continue
     with log_file.open("rb") as stream:
         stream.seek(max(start, log_file.stat().st_size - 2_000_000))
