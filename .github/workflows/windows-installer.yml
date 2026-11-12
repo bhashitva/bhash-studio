@@ -37,7 +37,8 @@ jobs:
           $destination = Join-Path $env:RUNNER_TEMP 'yantra-preview'
           & unpacked/Install.ps1 -InstallRoot $destination -NoShortcut -SkipDebugTools
           $app = Get-ChildItem $destination -Directory -Filter 'app-*' | Select-Object -First 1
-          python (Join-Path $app.FullName 'Launch.py') --check
+          $tools = Get-Content (Join-Path $app.FullName 'installed-tools.json') -Raw | ConvertFrom-Json
+          & $tools.python (Join-Path $app.FullName 'Launch.py') --check
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:

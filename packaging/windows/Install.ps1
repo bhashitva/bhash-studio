@@ -191,6 +191,7 @@ if ($missing.Count) {
 } else { Write-Host "Reusing Android SDK: $sdk" }
 
 $config = @{
+    python = $python
     compiler = $compiler; java = $java; sdk = [string]$sdk; debugger = [string]$debugger
     clangBin = $(if ($clang) { Split-Path $clang } else { '' })
 } | ConvertTo-Json
