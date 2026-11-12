@@ -1,8 +1,9 @@
-# Roadmap for Bhash Studio
+# Roadmap for Bhash Yantra
 
-Bhash Studio starts with Android applications and will expand to desktop and web applications. Shared project models and target adapters keep platform-specific build and packaging work outside the common editor and schema. The Android phases below form the initial delivery track. Desktop and web need separate capability, lifecycle, preview, packaging and acceptance milestones before being enabled.
+Bhash Yantra starts with Android applications and will expand to desktop and web applications. Shared project models and target adapters keep platform-specific build and packaging work outside the common editor and schema. The Android phases below form the initial delivery track. Desktop and web need separate capability, lifecycle, preview, packaging and acceptance milestones before being enabled.
 
-**Proposed product name** भाष विकासशाला  
+**Product name** भाष यंत्र
+
 **Planning date** November 10, 2026
 
 Build a standalone desktop environment in which a Hindi-speaking developer can start with a blank project, write application logic and screens in Bhash, configure Android capabilities, test on a phone, fix failures, and ship a signed Android app. Familiarity with Latin letters and digits is sufficient for any machine identifiers the developer encounters. Every instruction, decision, and recovery step in the supported workflow is explained in Hindi.

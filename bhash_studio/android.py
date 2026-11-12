@@ -8,14 +8,13 @@ import os
 import shutil
 import signal
 import subprocess
-import tempfile
 import time
 import uuid
 import xml.etree.ElementTree as ET
 
 from .errors import StudioError
-from .layout import handlers
-from .project import CONFIG, LAYOUT, SOURCE, LocalPath as Path, atomic_write
+from .layout import handlers, walk
+from .project import BUILD_DIRECTORY, CONFIG, LAYOUT, LocalPath as Path, atomic_write
 from .targets import require_android, validate_snapshot
 
 
@@ -33,6 +32,17 @@ def kotlin_text(text):
 
 def generate_activity(screen):
     bindings = {name: f"bhash_studio_action_{index}" for index, name in enumerate(handlers(screen))}
+    components = [node for node in walk(screen.content) if node.identity is not None]
+    state = {node.identity: f"textState{index}" for index, node in enumerate(components)}
+    actions = [node for node in walk(screen.content) if node.action]
+    button_tags = {id(node): f"action:{index}" for index, node in enumerate(actions)}
+    legacy_status = any(node.action.result_id is None for node in actions)
+    declarations = []
+    for node in components:
+        initial = node.initial if node.kind == "प्रविष्टि" else node.text
+        declarations.append(f"var {state[node.identity]} by rememberSaveable {{ mutableStateOf({kotlin_text(initial)}) }}")
+    if legacy_status:
+        declarations.append('var status by rememberSaveable { mutableStateOf("") }')
 
     def emit(node, indent):
         pad = " " * indent
@@ -41,17 +51,35 @@ def generate_activity(screen):
             body = "\n".join(emit(child, indent + 4) for child in node.children)
             return f"{pad}{component} {{\n{body}\n{pad}}}"
         if node.kind == "पाठ":
-            return pad + f"Text({kotlin_text(node.text)})"
-        call = f"BhashBindings.{bindings[node.handler]}({kotlin_text(node.argument)})"
-        return f'''{pad}Button(enabled = !busy, onClick = {{
+            if node.identity is None:
+                return pad + f"Text({kotlin_text(node.text)})"
+            return pad + f"Text({state[node.identity]}, modifier = Modifier.testTag({kotlin_text('text:' + node.identity)}))"
+        if node.kind == "प्रविष्टि":
+            value = state[node.identity]
+            return f'''{pad}OutlinedTextField(
+{pad}    value = {value}, onValueChange = {{ {value} = it }},
+{pad}    label = {{ Text({kotlin_text(node.text)}) }}, singleLine = true,
+{pad}    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+{pad}    modifier = Modifier.testTag({kotlin_text("input:" + node.identity)})
+{pad})'''
+        action = node.action
+        argument = kotlin_text(action.literal)
+        snapshot = ""
+        if action.input_id is not None:
+            snapshot = f"{pad}    val input = {state[action.input_id]}\n"
+            argument = "input"
+        result = state[action.result_id] if action.result_id is not None else "status"
+        call = f"BhashBindings.{bindings[action.handler]}({argument})"
+        return f'''{pad}Button(modifier = Modifier.testTag({kotlin_text(button_tags[id(node)])}), enabled = !busy, onClick = {{
+{snapshot}{pad}    busy = true
+{pad}    error = ""
 {pad}    scope.launch {{
-{pad}        busy = true
 {pad}        try {{
-{pad}            status = BhashRuntime.onWorker {{ {call} }}
+{pad}            {result} = BhashRuntime.onWorker {{ {call} }}
 {pad}        }} catch (cancelled: CancellationException) {{
 {pad}            throw cancelled
 {pad}        }} catch (_: Exception) {{
-{pad}            status = "कार्य पूरा नहीं हो सका। फिर प्रयास करें।"
+{pad}            error = "कार्य पूरा नहीं हो सका। फिर प्रयास करें।"
 {pad}        }} finally {{
 {pad}            busy = false
 {pad}        }}
@@ -66,11 +94,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -81,14 +112,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            var status by rememberSaveable { mutableStateOf("") }
+''' + "".join(f"            {line}\n" for line in declarations) + '''
+            var error by remember { mutableStateOf("") }
             var busy by remember { mutableStateOf(false) }
             val scope = rememberCoroutineScope()
             MaterialTheme {
                 Surface(Modifier.fillMaxSize()) {
                     Column(Modifier.padding(24.dp).verticalScroll(rememberScrollState())) {
-''' + f"                        Text({kotlin_text(screen.title)}, style = MaterialTheme.typography.headlineMedium)\n" + emit(screen.content, 24) + '''
-                        Text(status)
+''' + f"                        Text({kotlin_text(screen.title)}, style = MaterialTheme.typography.headlineMedium)\n" + emit(screen.content, 24) + (
+        "\n                        Text(status)" if legacy_status else ""
+    ) + '''
+                        if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
@@ -104,41 +138,57 @@ def generate_exports(screen):
 
 def generate_device_tests(screen):
     """Generate tests for the authored screen, replacing the upstream hello fixture."""
-    buttons = []
-
-    def visit(node):
-        if node.handler:
-            buttons.append(node)
-        for child in node.children:
-            visit(child)
-
-    visit(screen.content)
+    buttons = [node for node in walk(screen.content) if node.action]
     action_tests = ""
     if buttons:
+        index = next((i for i, node in enumerate(buttons) if node.action.input_id is not None), 0)
+        action = buttons[index].action
+        binding = handlers(screen).index(action.handler)
+        setup = ""
+        repeat = ""
+        if action.input_id is not None:
+            field = kotlin_text("input:" + action.input_id)
+            setup = f'''
+        val input = compose.onNodeWithTag({field})
+        val originalInput = argument("inputBase64")
+        input.performScrollTo().performTextReplacement(originalInput)
+        input.performImeAction()'''
+            repeat = f'''
+            input.performScrollTo().assertTextContains(originalInput)
+            val changedInput = argument("unicodeArgumentBase64")
+            input.performTextReplacement(changedInput)
+            input.performImeAction()
+            click()
+            awaitResult(argument("unicodeResultBase64"))'''
+        target = kotlin_text("text:" + action.result_id) if action.result_id is not None else "null"
         action_tests = '''
     @Test fun actionSurvivesRotationAndRecreation() {
         val expected = argument("expectedResultBase64")
         val original = compose.activity.requestedOrientation
-        compose.onAllNodes(hasText(@BUTTON@) and hasClickAction()).onFirst().performClick()
-        awaitText(expected)
+        fun click() { compose.onNodeWithTag(@BUTTON@).performScrollTo().performClick() }
+        fun awaitResult(value: String) { awaitText(value, @TARGET@) }
+@SETUP@
+        click()
+        awaitResult(expected)
         try {
             compose.activityRule.scenario.onActivity {
                 it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             }
             awaitOrientation(Configuration.ORIENTATION_LANDSCAPE)
-            awaitText(expected)
+            awaitResult(expected)
             compose.activityRule.scenario.onActivity {
                 it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             }
             awaitOrientation(Configuration.ORIENTATION_PORTRAIT)
-            awaitText(expected)
+            awaitResult(expected)
             compose.activityRule.scenario.recreate()
-            awaitText(expected)
+            awaitResult(expected)
             repeat(3) {
-                compose.onAllNodes(hasText(@BUTTON@) and hasClickAction()).onFirst().performClick()
+                click()
                 compose.waitForIdle()
-                awaitText(expected)
+                awaitResult(expected)
             }
+@REPEAT@
         } finally {
             compose.activityRule.scenario.onActivity { it.requestedOrientation = original }
         }
@@ -149,11 +199,12 @@ def generate_device_tests(screen):
         val expected = argument("unicodeResultBase64")
         runBlocking {
             BhashRuntime.onWorker {
-                repeat(40) { assertEquals(expected, BhashBindings.bhash_studio_action_0(value)) }
+                repeat(40) { assertEquals(expected, BhashBindings.bhash_studio_action_@BINDING@(value)) }
             }
         }
     }
-'''.replace("@BUTTON@", kotlin_text(buttons[0].text))
+'''.replace("@BUTTON@", kotlin_text(f"action:{index}")).replace("@TARGET@", target).replace(
+            "@SETUP@", setup).replace("@REPEAT@", repeat).replace("@BINDING@", str(binding))
     return '''// Generated by Bhash Studio from the authored screen.
 package org.bhashitva.androidstarter
 
@@ -193,11 +244,12 @@ class StudioScreenTest {
         return String(Base64.decode(encoded!!, Base64.DEFAULT), Charsets.UTF_8)
     }
 
-    private fun awaitText(text: String) {
+    private fun awaitText(text: String, target: String? = null) {
+        val matcher = if (target == null) hasText(text) else hasTestTag(target) and hasText(text)
         compose.waitUntil(15_000) {
-            runCatching { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false)
+            runCatching { compose.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false)
         }
-        compose.onAllNodesWithText(text).onFirst().assertIsDisplayed()
+        compose.onAllNodes(matcher).onFirst().performScrollTo().assertIsDisplayed()
     }
 
     private fun awaitOrientation(orientation: Int) {
@@ -213,7 +265,6 @@ class Toolchain:
     compiler: str = ""
     java: str = ""
     sdk: str = ""
-    workspace: str = ""
 
     @classmethod
     def discover(cls):
@@ -229,8 +280,7 @@ class Toolchain:
         standard_sdk = Path(os.environ.get("LOCALAPPDATA", "")) / "Android/Sdk"
         if not sdk and os.name == "nt" and standard_sdk.is_dir():
             sdk = str(standard_sdk)
-        return cls(os.environ.get("BHASH_COMPILER_JAR", ""), java, sdk,
-                   os.environ.get("BHASH_STUDIO_BUILD_ROOT", str(Path(tempfile.gettempdir()) / "bhash-studio-builds")))
+        return cls(os.environ.get("BHASH_COMPILER_JAR", ""), java, sdk)
 
     def validate(self):
         if not self.compiler or not Path(self.compiler).is_file() or Path(self.compiler).suffix.lower() != ".jar":
@@ -302,11 +352,57 @@ class AndroidTarget:
         self.tools = tools
         self.runner = runner
 
-    def command(self, arguments, job):
+    def command(self, arguments):
         # ASCII transport preserves developer paths independently of Windows ANSI encoding.
         encoded = [base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii") for value in arguments]
-        return [self.tools.java, "-Dfile.encoding=UTF-8", "--class-path", str(job / "compiler.jar"),
-                str(job / "BhashStudioLauncher.java"), *encoded]
+        # The launcher and compiler are in the job's working directory.
+        return [self.tools.java, "-Dfile.encoding=UTF-8", "--class-path", "compiler.jar",
+                "BhashStudioLauncher.java", *encoded]
+
+    def prepare_unicode_build(self, output, job):
+        # The pinned starter passes absolute arguments to a legacy Windows Java launcher.
+        script = output / "gradle/bhash-native.gradle"
+        original = script.read_text(encoding="utf-8")
+        command = "                commandLine(command)"
+        if command not in original:
+            raise StudioError("इस कंपाइलर का निर्माण प्रारूप समर्थित नहीं है।")
+        replacement = """                def encoded = command.drop(3).collect {
+                    Base64.getUrlEncoder().encodeToString(it.toString().getBytes('UTF-8'))
+                }
+                commandLine([command[0], '-Dfile.encoding=UTF-8', '--class-path',
+                    'bhash/compiler.jar', 'BhashStudioLauncher.java'] + encoded)"""
+        original = original.replace(
+            "layout.buildDirectory.dir('generated/bhash')",
+            "providers.provider { rootProject.layout.projectDirectory.dir('n') }",
+            1,
+        )
+        atomic_write(script, original.replace(command, replacement, 1))
+        shutil.copyfile(job / "BhashStudioLauncher.java", output / "BhashStudioLauncher.java")
+
+    def build_unicode_project(self, output, job, apk, app_id, log, cancel, run, device):
+        env = self.tools.environment()
+        self.runner(self.command(["android", "doctor", str(output)]), job, env, log, cancel)
+        adb = None
+        if run:
+            sdk = env.get("ANDROID_HOME") or env.get("ANDROID_SDK_ROOT")
+            if not sdk:
+                raise StudioError("औज़ार सेटिंग में एंड्रॉयड विकास फ़ोल्डर चुनें।")
+            adb = str(Path(sdk) / "platform-tools/adb.exe")
+            listing = self.runner([adb, "devices"], output, env, log, cancel)
+            ready = [fields[0] for line in listing.splitlines()
+                     if len(fields := line.split()) >= 2 and fields[1] == "device"]
+            if not device and len(ready) == 1:
+                device = ready[0]
+            if device not in ready:
+                raise StudioError("उपकरण उपलब्ध नहीं है। एमुलेटर चलाएँ या औज़ार सेटिंग में तैयार उपकरण चुनें।")
+        self.runner([self.tools.java, "-Dfile.encoding=UTF-8", "-cp", "gradle/wrapper/gradle-wrapper.jar",
+                     "org.gradle.wrapper.GradleWrapperMain", ":app:assembleDebug"],
+                    output, env, log, cancel)
+        if adb and apk.is_file():
+            self.runner([adb, "-s", device, "install", "-r", apk.relative_to(output).as_posix()],
+                        output, env, log, cancel)
+            self.runner([adb, "-s", device, "shell", "am", "start", "-n",
+                         f"{app_id}/org.bhashitva.androidstarter.MainActivity"], output, env, log, cancel)
 
     def execute(self, project, snapshot, operation, cancel, report, device=""):
         if operation not in {"export", "build", "run"}:
@@ -314,14 +410,8 @@ class AndroidTarget:
         config, screen = validate_snapshot(snapshot)
         require_android(config)
         self.tools.validate()
-        job_id = uuid.uuid4().hex
-        managed = project.root / ".studio"
-        if managed.is_symlink() or managed.resolve().parent != project.root:
-            raise StudioError("निर्माण फ़ोल्डर परियोजना के भीतर होना चाहिए।")
-        managed.mkdir(exist_ok=True)
-        workspace = Path(self.tools.workspace or Path(tempfile.gettempdir()) / "bhash-studio-builds").resolve()
-        if os.name == "nt" and not str(workspace).isascii():
-            raise StudioError("औज़ार में निर्माण फ़ोल्डर का मार्ग केवल अंग्रेज़ी अक्षरों और अंकों से चुनें। आपकी परियोजना का नाम हिंदी में रह सकता है।")
+        job_id = uuid.uuid4().hex[:16]
+        workspace = project.file(BUILD_DIRECTORY)
         workspace.mkdir(parents=True, exist_ok=True)
         job = workspace / job_id
         job.mkdir()
@@ -331,16 +421,21 @@ class AndroidTarget:
         log = job / "tool-output.log"
         report("निर्माण फ़ोल्डर — " + str(job))
         report("एंड्रॉयड परियोजना तैयार हो रही है…")
-        self.runner(self.command(["android", "init", str(output), "--id", config["ऐप_पहचान"], "--name", config["नाम"]], job),
+        self.runner(self.command(["android", "init", str(output), "--id", config["ऐप_पहचान"], "--name", config["नाम"]]),
                     job, self.tools.environment(), log, cancel)
         source = output / "src"
-        for file in source.glob("*.bhash"):
+        for file in source.rglob("*.bhash"):
             file.unlink()
-        atomic_write(source / SOURCE, snapshot[SOURCE])
+        for name, text in snapshot.items():
+            if name.endswith(".bhash"):
+                self.stage_source(project, source, name, text)
         # A screen with no button still needs a valid export for the Android native starter.
         exports = generate_exports(screen)
         if not exports:
-            atomic_write(source / "studio.bhash", 'फलन भाष_दृश्य(मान: पाठ) -> पाठ { लौटाओ मान; }\n')
+            # Keep the generated bridge separate from authored files.
+            bridge = source / ".yantra" / "studio.bhash"
+            bridge.parent.mkdir(exist_ok=True)
+            atomic_write(bridge, 'फलन भाष_दृश्य(मान: पाठ) -> पाठ { लौटाओ मान; }\n')
             exports = "bhash_studio_screen = भाष_दृश्य(पाठ) -> पाठ\n"
         atomic_write(output / "bhash.exports", exports)
         activity = output / "app/src/main/java/org/bhashitva/androidstarter/MainActivity.kt"
@@ -355,13 +450,17 @@ class AndroidTarget:
             ET.SubElement(manifest.getroot(), "uses-permission", {"{http://schemas.android.com/apk/res/android}name": "android.permission.INTERNET"})
         manifest.write(manifest_path, encoding="utf-8", xml_declaration=True)
         properties = output / "gradle.properties"
-        atomic_write(properties, properties.read_text(encoding="utf-8") + "\norg.gradle.daemon=false\n")
+        build_options = "\norg.gradle.daemon=false\n"
+        unicode_build = os.name == "nt" and not str(workspace).isascii()
+        if unicode_build:
+            build_options += "android.overridePathCheck=true\n"
+            self.prepare_unicode_build(output, job)
+        atomic_write(properties, properties.read_text(encoding="utf-8") + build_options)
         record = {"schema": 1, "output": str(output), "compiler_sha256": hashlib.sha256(Path(self.tools.compiler).read_bytes()).hexdigest(),
                   "sources": {name: hashlib.sha256(text.encode("utf-8")).hexdigest() for name, text in snapshot.items()}}
         atomic_write(job / "build-inputs.json", json.dumps(record, indent=2))
-        atomic_write(managed / (job_id + ".json"), json.dumps(record, indent=2))
         for name, text in snapshot.items():
-            atomic_write(job / name, text)
+            self.stage_source(project, job, name, text)
         if operation != "export":
             report("ऐप बनाया जा रहा है…" if operation == "build" else "ऐप बनाकर उपकरण पर चलाया जा रहा है…")
             args = ["android", operation, str(output)]
@@ -369,7 +468,17 @@ class AndroidTarget:
                 if not all(c.isalnum() or c in "_.:%[]-" for c in device) or device.startswith("-"):
                     raise StudioError("उपकरण की पहचान सही नहीं है।")
                 args += ["--device", device]
-            self.runner(self.command(args, job), job, self.tools.environment(), log, cancel)
-            if not (output / "app/build/outputs/apk/debug/app-debug.apk").is_file():
+            apk = output / "app/build/outputs/apk/debug/app-debug.apk"
+            if unicode_build:
+                self.build_unicode_project(output, job, apk, config["ऐप_पहचान"], log, cancel, operation == "run", device)
+            else:
+                self.runner(self.command(args), job, self.tools.environment(), log, cancel)
+            if not apk.is_file():
                 raise StudioError("निर्माण ने अपेक्षित परीक्षण पैकेज नहीं दिया। औज़ार संस्करण और निर्माण विवरण जाँचें।")
         return output
+
+    def stage_source(self, project, destination, name, text):
+        relative = project.file(name).relative_to(project.root)
+        file = destination / relative
+        file.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(file, text)

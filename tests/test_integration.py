@@ -5,7 +5,7 @@ import threading
 import unittest
 
 from bhash_studio.android import AndroidTarget, Toolchain
-from bhash_studio.project import Project
+from bhash_studio.project import SOURCE, Project
 
 
 @unittest.skipUnless(os.environ.get("BHASH_STUDIO_ANDROID_TESTS") == "1", "Enable with a real Bhash compiler and Android SDK")
@@ -17,6 +17,16 @@ class AndroidIntegrationTests(unittest.TestCase):
             root = Path(location or temp)
             root.mkdir(parents=True, exist_ok=True)
             project = Project.create(root / "हिंदी-निर्माण", "भाष परीक्षण")
+            helper = project.root / "सहायक"
+            helper.mkdir()
+            (helper / "नाम.bhash").write_text(
+                'फलन सजाएँ(नाम: पाठ) -> पाठ { लौटाओ "नमस्ते, " + नाम + "!"; }\n',
+                encoding="utf-8",
+            )
+            project.file(SOURCE).write_text(
+                "फलन अभिवादन(नाम: पाठ) -> पाठ { लौटाओ सजाएँ(नाम); }\n",
+                encoding="utf-8",
+            )
             output = AndroidTarget(Toolchain.discover()).execute(project, project.snapshot(), "build",
                        threading.Event(), lambda text: print(text, flush=True))
             apk = output / "app/build/outputs/apk/debug/app-debug.apk"

@@ -1,13 +1,14 @@
 from pathlib import Path
 import os
 import shutil
+import stat
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from bhash_studio.config import dumps, loads
 from bhash_studio.errors import StudioError
-from bhash_studio.project import CONFIG, SOURCE, FILES, Project, LocalPath, digest
+from bhash_studio.project import BUILD_DIRECTORY, CONFIG, SOURCE, FILES, Project, LocalPath, digest
 
 
 class ProjectTests(unittest.TestCase):
@@ -70,6 +71,22 @@ class ProjectTests(unittest.TestCase):
         with self.assertRaises(StudioError):
             self.project.read("../secret")
 
+    def test_add_file_creates_or_copies_without_overwriting(self):
+        filename = "नया.भाषदृश्य"
+        self.project.add_file(filename)
+        self.assertEqual(self.project.read(filename), "")
+        original = Path(self.temp.name) / "चित्र.bin"
+        data = b"\x00\xff"
+        original.write_bytes(data)
+        self.project.add_file(original.name, original)
+        self.assertEqual((self.project.root / original.name).read_bytes(), data)
+        self.assertEqual(original.read_bytes(), data)
+        with self.assertRaises(StudioError):
+            self.project.add_file(original.name)
+        with self.assertRaises(StudioError):
+            self.project.add_file("../बाहर")
+        self.assertEqual((self.project.root / original.name).read_bytes(), data)
+
     def test_long_hindi_project_paths(self):
         parent = LocalPath(self.temp.name) / ("a" * 80) / ("b" * 80)
         parent.mkdir(parents=True)
@@ -81,6 +98,37 @@ class ProjectTests(unittest.TestCase):
         old = project.read(SOURCE)
         project.save(SOURCE, old + "\n", digest(old))
         self.assertEqual(Project.open(project.root).read(SOURCE), old + "\n")
+
+    def test_build_cleanup_removes_long_children_under_a_short_root(self):
+        name = "0123456789abcdef"
+        output = self.project.root / BUILD_DIRECTORY
+        job = output / name
+        if os.name == "nt":
+            self.addCleanup(shutil.rmtree, output.extended_path())
+        nested = job / "android" / "app" / "build" / ("intermediate_" * 10) / ("bucket_" * 15)
+        nested.mkdir(parents=True)
+        (nested / "result.dex").write_bytes(b"test")
+        self.assertLess(len(str(job)), 248)
+        self.assertGreater(len(str(nested)), 260)
+        self.assertEqual(self.project.previous_builds(), [name])
+        self.assertTrue(self.project.remove_build(name))
+        self.assertFalse(job.exists())
+        self.assertTrue(output.is_dir())
+
+    @unittest.skipUnless(os.name == "nt", "Windows read-only file attributes")
+    def test_build_cleanup_retries_read_only_files_and_directories(self):
+        name = "0e1dd0a812d64efa"
+        job = self.project.root / BUILD_DIRECTORY / name
+        checksums = job / "android/.gradle/8.11.1/checksums"
+        checksums.mkdir(parents=True)
+        (job / "tool-output.log").touch()
+        cache = checksums / "checksums.bin"
+        cache.touch()
+        os.chmod(cache, stat.S_IREAD)
+        os.chmod(checksums, stat.S_IREAD)
+        self.assertTrue(os.lstat(checksums).st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+        self.assertTrue(self.project.remove_build(name))
+        self.assertFalse(job.exists())
 
     def test_symlink_files_are_rejected(self):
         outside = Path(self.temp.name) / "outside"

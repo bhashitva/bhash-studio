@@ -1,4 +1,4 @@
-# Testing Bhash Studio
+# Testing Bhash Yantra
 
 Run the core suite from the repository root. It uses the Python standard library and requires no package install.
 
@@ -6,7 +6,7 @@ Run the core suite from the repository root. It uses the Python standard library
 python -m unittest discover -s tests -v
 ```
 
-On a desktop session, enable the real Tk widget test. It edits, switches buffers, saves, invokes the check button and reopens the project through normal application methods.
+On a desktop session, enable the real Tk widget tests. They open Help from the menu, browse to a Hindi project's configuration file, check toolchain file filters, switch files, and save and check the project. They also verify keyword coloring outside strings, live completion and keyboard acceptance, indented construct insertion, and Android job cancellation.
 
 ```powershell
 $env:BHASH_STUDIO_GUI_TESTS = '1'
@@ -27,7 +27,7 @@ python -m unittest discover -s tests -p test_integration.py -v
 
 ## Emulator instrumentation
 
-Every new Android export includes `StudioScreenTest` for its authored title and first button. It replaces the upstream starter's greeting tests, which reference a different Bhash export. Action tests require fixture expectations supplied as Base64 UTF-8 instrumentation arguments. Without those expectations the action-specific tests are skipped, while the title test still runs. The native runtime uses forced GC in the test runner.
+Every new Android export includes `StudioScreenTest` for its authored title and first live-input button, or its first literal button if no live binding exists. It replaces the upstream starter's greeting tests, which reference a different Bhash export. Action tests require fixture expectations supplied as Base64 UTF-8 instrumentation arguments. The live-input case supplies `inputBase64`, verifies the identified result, checks the input after recreation, and changes it to verify a second result. Without fixture expectations the action-specific tests are skipped, while the title test still runs. The native runtime uses forced GC in the test runner.
 
 For the unchanged greeting fixture, start an Android API 29 or later emulator and point the opt-in Python wrapper at a studio-generated Android output directory. The wrapper refreshes the generated device tests, builds the app and instrumentation APKs, and installs them through ADB. It runs the three tests with Android's `am instrument` command, rejects skipped or incomplete cases, writes a JUnit-compatible result, and verifies a cold launch through the same Bhash Android CLI used by the studio. This execution path does not require Gradle's additional Unified Test Platform host plugins.
 

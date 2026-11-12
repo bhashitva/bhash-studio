@@ -106,7 +106,6 @@ jobs:
       - name: Configure temporary build paths
         run: |
           echo "BHASH_COMPILER_JAR=$RUNNER_TEMP/bhash-toolchain/compiler.jar" >> "$GITHUB_ENV"
-          echo "BHASH_STUDIO_BUILD_ROOT=$RUNNER_TEMP/studio-builds" >> "$GITHUB_ENV"
           echo "BHASH_STUDIO_TEST_OUTPUT=$RUNNER_TEMP/studio-source" >> "$GITHUB_ENV"
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
@@ -130,7 +129,7 @@ jobs:
           python - <<'PY'
           import os
           from pathlib import Path
-          outputs = list(Path(os.environ["BHASH_STUDIO_BUILD_ROOT"]).glob("*/android"))
+          outputs = list(Path(os.environ["BHASH_STUDIO_TEST_OUTPUT"]).glob("*/bhash-studio-builds/*/android"))
           assert len(outputs) == 1, "Expected one generated Android project"
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as stream:
               stream.write(f"BHASH_STUDIO_ANDROID_OUTPUT={outputs[0]}\n")
@@ -158,12 +157,12 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
           path: |
-            ${{ runner.temp }}/studio-builds/**/outputs/apk/**/*.apk
-            ${{ runner.temp }}/studio-builds/**/device-results.xml
-            ${{ runner.temp }}/studio-builds/**/instrumentation-output.txt
-            ${{ runner.temp }}/studio-builds/**/device-test.log
-            ${{ runner.temp }}/studio-builds/**/tool-output.log
-            ${{ runner.temp }}/studio-builds/**/build-inputs.json
+            ${{ runner.temp }}/studio-source/**/outputs/apk/**/*.apk
+            ${{ runner.temp }}/studio-source/**/device-results.xml
+            ${{ runner.temp }}/studio-source/**/instrumentation-output.txt
+            ${{ runner.temp }}/studio-source/**/device-test.log
+            ${{ runner.temp }}/studio-source/**/tool-output.log
+            ${{ runner.temp }}/studio-source/**/build-inputs.json
 
   ci:
     name: CI checks

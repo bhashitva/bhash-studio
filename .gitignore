@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .studio/
+bhash-studio-builds/
 build/
 dist/
 *.egg-info/

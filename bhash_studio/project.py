@@ -4,6 +4,9 @@ from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
+import re
+import shutil
+import stat
 import tempfile
 import uuid
 
@@ -15,8 +18,11 @@ class LocalPath(type(Path())):
     """Use Windows extended paths for filesystem calls, retaining readable display paths."""
 
     def __fspath__(self):
+        return self.extended_path() if len(str(self)) >= 248 else str(self)
+
+    def extended_path(self):
         text = str(self)
-        if os.name == "nt" and self.is_absolute() and len(text) >= 248 and not text.startswith("\\\\?\\"):
+        if os.name == "nt" and self.is_absolute() and not text.startswith("\\\\?\\"):
             return "\\\\?\\UNC\\" + text[2:] if text.startswith("\\\\") else "\\\\?\\" + text
         return text
 
@@ -24,10 +30,15 @@ CONFIG = "परियोजना.भाषविन्यास"
 LAYOUT = "पर्दा.भाषदृश्य"
 SOURCE = "मुख्य.bhash"
 FILES = (CONFIG, LAYOUT, SOURCE)
+BUILD_DIRECTORY = "bhash-studio-builds"
+BUILD_ID = re.compile(r"[0-9a-f]{16}")
+SCRATCH_DIRECTORY = ".studio"
 DEFAULT_LAYOUT = '''<पर्दा पहचान="मुख्य" शीर्षक="मेरा पहला ऐप">
   <स्तंभ>
     <पाठ>भाष में आपका स्वागत है</पाठ>
-    <बटन दबानेपर="अभिवादन" तर्क="दुनिया">अभिवादन करें</बटन>
+    <प्रविष्टि पहचान="नाम">अपना नाम लिखें</प्रविष्टि>
+    <बटन दबानेपर="अभिवादन" इनपुटसे="नाम" परिणाममें="संदेश">अभिवादन करें</बटन>
+    <पाठ पहचान="संदेश"/>
   </स्तंभ>
 </पर्दा>
 '''
@@ -45,7 +56,7 @@ def atomic_write(file, text):
     temp = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=file.parent, delete=False) as stream:
-            temp = Path(stream.name)
+            temp = LocalPath(stream.name)
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
@@ -84,29 +95,76 @@ class Project:
 
     @classmethod
     def open(cls, directory):
-        project = cls(LocalPath(directory).expanduser().resolve())
+        selected = LocalPath(directory).expanduser()
+        if selected.is_dir():
+            root = selected
+        elif selected.name == CONFIG:
+            root = selected.parent
+        elif selected.is_file():
+            raise StudioError(f"परियोजना खोलने के लिए ‘{CONFIG}’ चुनें। चुनी गई फ़ाइल — {selected}")
+        else:
+            raise StudioError(f"परियोजना फ़ोल्डर नहीं मिला — {selected.absolute()}")
+        project = cls(root.resolve())
         for filename in FILES:
             project.read(filename)
         return project
 
     def file(self, filename):
-        if filename not in FILES:
-            raise StudioError("इस परियोजना फ़ाइल को खोलने की अनुमति नहीं है।")
-        file = self.root / filename
-        if file.is_symlink() or file.resolve().parent != self.root:
+        relative = Path(filename)
+        if not relative.parts or relative.anchor or ".." in relative.parts:
+            raise StudioError("परियोजना फ़ाइल का मार्ग उसके फ़ोल्डर के अंदर होना चाहिए।")
+        file = self.root / relative
+        if not file.resolve().is_relative_to(self.root) or any(
+            (self.root / Path(*relative.parts[:end])).is_symlink()
+            for end in range(1, len(relative.parts) + 1)
+        ):
             raise StudioError("परियोजना फ़ाइल का मार्ग उसके फ़ोल्डर के अंदर होना चाहिए।")
         return file
 
     def read(self, filename):
         file = self.file(filename)
         if not file.is_file():
-            raise StudioError(f"परियोजना फ़ाइल ‘{filename}’ नहीं मिली।")
+            raise StudioError(f"परियोजना फ़ाइल ‘{filename}’ नहीं मिली। खोजा गया मार्ग — {file}")
         if file.stat().st_size > MAX_SOURCE * 4:
             raise StudioError("परियोजना फ़ाइल का आकार बहुत बड़ा है।")
         try:
-            return file.read_text(encoding="utf-8")
+            text = file.read_text(encoding="utf-8")
         except UnicodeError as error:
             raise StudioError("फ़ाइल को यूनिकोड के यूटीएफ 8 रूप में सहेजें।") from error
+        if "\0" in text or len(text) > MAX_SOURCE:
+            raise StudioError("यह फ़ाइल संपादन योग्य पाठ नहीं है या इसका आकार बहुत बड़ा है।")
+        return text
+
+    def new_path(self, filename, folder=""):
+        if (not filename or filename in {".", "..", BUILD_DIRECTORY, SCRATCH_DIRECTORY}
+                or Path(filename).name != filename or any(char in filename for char in "/\\:\0")):
+            raise StudioError("केवल नया नाम लिखें।")
+        destination = self.file(Path(folder) / filename)
+        if not destination.parent.is_dir():
+            raise StudioError("चुना गया फ़ोल्डर नहीं मिला।")
+        return destination
+
+    def add_folder(self, name, folder=""):
+        destination = self.new_path(name, folder)
+        try:
+            destination.mkdir()
+        except FileExistsError as error:
+            raise StudioError(f"‘{name}’ पहले से मौजूद है।") from error
+
+    def add_file(self, filename, source=None, folder=""):
+        destination = self.new_path(filename, folder)
+        try:
+            stream = destination.open("xb")
+        except FileExistsError as error:
+            raise StudioError(f"‘{filename}’ पहले से मौजूद है।") from error
+        try:
+            with stream:
+                if source is not None:
+                    with source.open("rb") as original:
+                        shutil.copyfileobj(original, stream)
+        except OSError:
+            destination.unlink()
+            raise
 
     def save(self, filename, text, expected):
         if len(text) > MAX_SOURCE:
@@ -122,4 +180,70 @@ class Project:
         return digest(text)
 
     def snapshot(self):
-        return {filename: self.read(filename) for filename in FILES}
+        files = {filename: self.read(filename) for filename in FILES}
+        files.update(self.source_snapshot({SOURCE: files[SOURCE]}))
+        return files
+
+    def previous_builds(self):
+        directory = self.file(BUILD_DIRECTORY)
+        if not directory.is_dir():
+            return []
+        return sorted(path.name for path in directory.iterdir()
+                      if BUILD_ID.fullmatch(path.name) and self.is_build_output(path))
+
+    @staticmethod
+    def is_build_output(path):
+        return (path.is_dir() and not path.is_symlink() and path.resolve() == path
+                and (any((path / marker).is_file() for marker in ("tool-output.log", "build-inputs.json", "compiler.jar"))
+                     or (path / "android" / "app" / "build").is_dir()))
+
+    def remove_build(self, name):
+        if not BUILD_ID.fullmatch(name):
+            raise StudioError("निर्माण फ़ोल्डर का नाम अमान्य है।")
+        path = self.file(Path(BUILD_DIRECTORY) / name)
+        if not path.exists():
+            return False
+        if not self.is_build_output(path):
+            raise StudioError("निर्माण फ़ोल्डर का मार्ग बदल गया है।")
+        # rmtree passes the root's string form to its recursive calls. A
+        # short root still needs the prefix when Gradle created long children.
+        native_path = LocalPath(path).extended_path()
+        if os.name == "nt":
+            shutil.rmtree(native_path, onerror=self.retry_readonly_removal)
+        else:
+            shutil.rmtree(native_path)
+        return True
+
+    @staticmethod
+    def retry_readonly_removal(operation, path, exc_info):
+        error = exc_info[1]
+        if getattr(error, "winerror", None) != 5 or operation not in (os.unlink, os.rmdir):
+            raise error
+        details = os.lstat(path)
+        if (not details.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+                or details.st_reparse_tag in (stat.IO_REPARSE_TAG_SYMLINK, stat.IO_REPARSE_TAG_MOUNT_POINT)):
+            raise error
+        # A synced directory can be read-only without being a symlink or junction.
+        os.chmod(path, details.st_mode | stat.S_IWRITE)
+        try:
+            operation(path)
+        except OSError:
+            if os.path.lexists(path):
+                os.chmod(path, details.st_mode)
+            raise
+
+    def source_snapshot(self, overlays):
+        files = dict(overlays)
+        directories = [self.root]
+        while directories:
+            for path in sorted(directories.pop().iterdir()):
+                if path.is_symlink():
+                    continue
+                if path.is_dir():
+                    if not path.name.startswith(".") and path.name != BUILD_DIRECTORY and path.resolve() == path:
+                        directories.append(path)
+                elif path.suffix == ".bhash" and path.is_file():
+                    relative = path.relative_to(self.root).as_posix()
+                    if relative not in files:
+                        files[relative] = self.read(relative)
+        return files

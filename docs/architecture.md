@@ -1,6 +1,6 @@
-# Bhash Studio architecture
+# Bhash Yantra architecture
 
-Bhash Studio is a general application development environment with an Android adapter first. The app developer authors Bhash and Hindi project files. The prototype implementation uses Python 3.11 and Tk so it runs without third-party Python dependencies. This bootstrap shell is a provisional implementation choice. Evaluate complex-script input, accessibility, large files and editor integration before committing to the production shell. The original roadmap proposed an Electron and Monaco evaluation.
+Bhash Yantra is a general application development environment with an Android adapter first. The app developer authors Bhash and Hindi project files. The prototype implementation uses Python 3.11 and Tk so it runs without third-party Python dependencies. This bootstrap shell is a provisional implementation choice. Evaluate complex-script input, accessibility, large files and editor integration before committing to the production shell. The original roadmap proposed an Electron and Monaco evaluation.
 
 ## Boundaries
 
@@ -13,15 +13,15 @@ Bhash Studio is a general application development environment with an Android ad
 | `android.py` | Generate Kotlin/Compose and exports, then invoke the existing Bhash Android CLI |
 | `app.py` | Hindi desktop UI, editor buffers, preview and background-job presentation |
 
-The preview and generator consume the same screen model. The preview renders structure and labels only. The Android host dispatches button events through generated Kotlin/JNI bindings to a real Bhash function. Bhash executes on its runtime worker. The Compose coroutine is lifecycle-bound and preserves cancellation. The result text survives ordinary configuration recreation with `rememberSaveable`.
+The preview and generator consume the same typed screen model. The preview shows authored structure, labels and initial input values. The Android host captures the input value at the moment of the click and dispatches the text action through generated Kotlin/JNI bindings to a real Bhash function on its runtime worker. The lifecycle-bound Compose coroutine writes the returned text to the authored target. Each identified input and text result has independent `rememberSaveable` state. The legacy shared result is generated only for buttons that still use it.
 
 The prototype bridge accepts handlers with one `पाठ` argument and a `पाठ` result. The full Bhash compiler checks source semantics during an Android build. The editor's check command validates configuration, layout and the handler signature shape. It does not implement a second Bhash compiler. Future type-aware editing should use the existing Bhash language server.
 
 ## Project and build ownership
 
-The three authored project files remain the source of truth. Generation creates a fresh job directory beneath the configured build workspace. Each job contains the source snapshot, compiler SHA-256, input hashes, raw local tool log and generated Android project. A reference is stored in the project's `.studio` directory. The existing compiler starter pins and verifies its copied compiler JAR. Failed jobs remain available for diagnosis. Concurrent GUI jobs are blocked and a failed build never replaces an earlier build directory. The default workspace is in the OS temporary directory. Configure a persistent build root or copy artifacts to retain them across temporary-file cleanup.
+The three authored project files remain the source of truth. Each generation creates a fresh job directory under the current project's `bhash-studio-builds`. It contains the source snapshot, compiler SHA-256, input hashes, local tool log, generated Android project and any APKs. The existing compiler starter pins and verifies its copied compiler JAR. Failed jobs remain available for diagnosis and a failed build never replaces an earlier job. Shared SDK installations and dependency caches continue to use their standard locations.
 
-On Windows the build workspace uses an ASCII path because Java launcher argument conversion and Android tools impose additional path constraints. A tiny source-mode Java launcher carries UTF-8 arguments in Base64 and forwards them to the real compiler. The compiler JAR and launcher are copied into the build workspace, so their Java argument paths are ASCII too. Authored project paths and filenames can contain Hindi. Filesystem calls use extended paths for long Windows names. Set `BHASH_STUDIO_BUILD_ROOT` to override the default cache path. Java 17 or 21 must include source-launch support. Explicit `JAVA_HOME` takes priority over PATH discovery.
+On Windows, a source-mode Java launcher carries UTF-8 arguments in Base64 and opens the compiler through a relative classpath. For a non-ASCII project path, Yantra also invokes the Gradle wrapper with a relative classpath and routes the generated native compile task through the same launcher. Java 17 or 21 must include source-launch support. Explicit `JAVA_HOME` takes priority over PATH discovery when there is no saved tool setting.
 
 Saving uses a temporary file followed by atomic replacement. Existing content hashes detect ordinary external edits before saving. This is optimistic conflict detection for a single editor process. A writer racing between comparison and replacement still requires a future file-locking protocol. Multi-file save can stop after some files are saved if a later file conflicts. Unsaved editor buffers remain available and the build is stopped.
 

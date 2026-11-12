@@ -30,7 +30,15 @@ All fields except प्रारंभिक_मान are required and unknown
 
 ## Screen XML
 
-The root is `पर्दा` with `पहचान="मुख्य"` and a nonempty `शीर्षक`. It contains one `स्तंभ` or `पंक्ति`. Containers may nest. `पाठ` contains literal text. `बटन` contains a label and requires `दबानेपर` naming a Bhash handler. Optional `तर्क` supplies its string argument, defaulting to an empty string. Unknown tags and attributes fail. XML entities for literal text such as `&amp;` and `&quot;` work. DTDs, comments and declarations with `<!` are rejected. At most 200 components and 12 nested container levels are accepted.
+The root is `पर्दा` with `पहचान="मुख्य"` and a nonempty `शीर्षक`. It contains one `स्तंभ` or `पंक्ति`. Containers may nest. Unknown tags and attributes fail. XML entities for literal text such as `&amp;` and `&quot;` work. DTDs, comments and declarations with `<!` are rejected. At most 200 components and 12 nested container levels are accepted.
+
+| Component | Authored behavior |
+| --- | --- |
+| `पाठ` | Displays its text. An optional `पहचान` makes it a result target and permits empty initial text. |
+| `प्रविष्टि` | Single-line text input. Its body is the visible label. Requires `पहचान` and accepts optional `आरंभिक` text. |
+| `बटन` | Its body is the label and `दबानेपर` names the Bhash handler. `इनपुटसे` reads the identified input at click time. `परिणाममें` writes the returned text to the identified `पाठ`. |
+
+Component IDs are NFC-normalized, unique within the screen and checked by component kind. Live input requires an explicit result target. `तर्क` supplies a literal argument and cannot be combined with `इनपुटसे`. Existing literal buttons without `परिणाममें` still display results in the shared footer. When neither input nor literal is provided, the argument is empty. Inputs and named text values survive configuration changes and ordinary activity recreation. They are not stored as application data across cold starts.
 
 Handlers currently use `फलन नाम(मान: पाठ) -> पाठ`. Export symbols are deterministic ASCII names assigned by traversal order within a build. They are internal implementation details. Bhash's compiler validates exported types and function resolution during compilation. The preliminary editor signature check is intentionally limited and can reject unusual formatting or accept a signature-looking comment. Full compiler validation is the build gate.
 
