@@ -63,10 +63,11 @@ shared data store and a coordinated migration process.
   [VS Code and GDB integration](https://github.com/bhashitva/bhash/blob/main/docs/native-vscode-debug.md).
   A Yantra integration can reuse that approach through the Debug Adapter
   Protocol and map temporary build source paths back to project tabs.
-- The Yantra web workflow currently builds a JVM JAR. Original-source JVM
-  breakpoints, stepping, and variable inspection need compiler debug metadata
-  and an adapter validated against Bhash. Verify those with a compiler fixture
-  before exposing them in the IDE. Bhash compiled to WebAssembly would also
+- The Yantra web workflow currently builds a JVM JAR. In a Bhash 0.25.0
+  starter build, `javap -v` showed line tables for `BhashProgram.java` and no
+  source mapping attribute on the entry-point class. Original-source JVM
+  breakpoints, stepping, and variable inspection need a verified compiler
+  mapping and a debugger adapter. Bhash compiled to WebAssembly would also
   require a verified source mapping and compatible browser debugger.
 
 ## Production logs
