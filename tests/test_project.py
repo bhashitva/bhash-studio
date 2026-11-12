@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 import shutil
+import stat
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -113,6 +114,21 @@ class ProjectTests(unittest.TestCase):
         self.assertTrue(self.project.remove_build(name))
         self.assertFalse(job.exists())
         self.assertTrue(output.is_dir())
+
+    @unittest.skipUnless(os.name == "nt", "Windows read-only file attributes")
+    def test_build_cleanup_retries_read_only_files_and_directories(self):
+        name = "0e1dd0a812d64efa"
+        job = self.project.root / BUILD_DIRECTORY / name
+        checksums = job / "android/.gradle/8.11.1/checksums"
+        checksums.mkdir(parents=True)
+        (job / "tool-output.log").touch()
+        cache = checksums / "checksums.bin"
+        cache.touch()
+        os.chmod(cache, stat.S_IREAD)
+        os.chmod(checksums, stat.S_IREAD)
+        self.assertTrue(os.lstat(checksums).st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+        self.assertTrue(self.project.remove_build(name))
+        self.assertFalse(job.exists())
 
     def test_symlink_files_are_rejected(self):
         outside = Path(self.temp.name) / "outside"

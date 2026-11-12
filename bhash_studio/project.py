@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import tempfile
 import uuid
 
@@ -206,8 +207,30 @@ class Project:
             raise StudioError("निर्माण फ़ोल्डर का मार्ग बदल गया है।")
         # rmtree passes the root's string form to its recursive calls. A
         # short root still needs the prefix when Gradle created long children.
-        shutil.rmtree(LocalPath(path).extended_path())
+        native_path = LocalPath(path).extended_path()
+        if os.name == "nt":
+            shutil.rmtree(native_path, onerror=self.retry_readonly_removal)
+        else:
+            shutil.rmtree(native_path)
         return True
+
+    @staticmethod
+    def retry_readonly_removal(operation, path, exc_info):
+        error = exc_info[1]
+        if getattr(error, "winerror", None) != 5 or operation not in (os.unlink, os.rmdir):
+            raise error
+        details = os.lstat(path)
+        if (not details.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+                or details.st_reparse_tag in (stat.IO_REPARSE_TAG_SYMLINK, stat.IO_REPARSE_TAG_MOUNT_POINT)):
+            raise error
+        # A synced directory can be read-only without being a symlink or junction.
+        os.chmod(path, details.st_mode | stat.S_IWRITE)
+        try:
+            operation(path)
+        except OSError:
+            if os.path.lexists(path):
+                os.chmod(path, details.st_mode)
+            raise
 
     def source_snapshot(self, overlays):
         files = dict(overlays)
