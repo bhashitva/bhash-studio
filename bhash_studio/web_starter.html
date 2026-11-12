@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="hi"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>भाष · कार्य सूची</title>
+<link rel="stylesheet" href="/assets/app.css">
+<header><p>भाष · HTTP + SQLite</p><h1>मेरे कार्य</h1><p>छोटा अनुप्रयोग, पूरा जीवन चक्र।</p></header>
+<form id="add"><label for="title">नया कार्य</label><input id="title" type="text" required maxlength="200" placeholder="आज क्या करना है?"><button>जोड़ें</button></form>
+<p id="status" role="status" aria-live="polite"></p><ul id="tasks"></ul><p>अधिकतम 100 कार्य दिखते हैं। डेटा इसी सर्वर की SQLite फ़ाइल में रहता है।</p>
+<script src="/assets/app.js" defer></script></html>

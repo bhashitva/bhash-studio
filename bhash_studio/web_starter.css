@@ -1,0 +1,42 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+body {
+    font: 18px system-ui;
+    max-width: 760px;
+    margin: 3rem auto;
+    padding: 0 1rem;
+    background: #f6f7fb;
+    color: #17253a;
+}
+
+header { border-bottom: 3px solid #1d7468; }
+
+form {
+    display: flex;
+    gap: 1rem;
+    margin: 2rem 0;
+}
+
+input[type="text"] {
+    flex: 1;
+    padding: 0.7rem;
+    min-width: 0;
+}
+
+button {
+    padding: 0.6rem 1rem;
+    cursor: pointer;
+}
+
+li {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: white;
+    padding: 1rem;
+    margin: 0.5rem 0;
+    border-radius: 0.5rem;
+}
+
+li span { flex: 1; }
+ul { padding: 0; }
+#status { min-height: 2em; }

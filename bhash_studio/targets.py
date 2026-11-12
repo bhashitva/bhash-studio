@@ -14,7 +14,7 @@ class Target:
     implemented: bool
 
 
-TARGETS = (Target("एंड्रॉयड", True), Target("डेस्कटॉप", False), Target("वेब", False))
+TARGETS = (Target("एंड्रॉयड", True), Target("डेस्कटॉप", False), Target("वेब", True))
 
 
 def validate_snapshot(snapshot):
@@ -29,4 +29,4 @@ def validate_snapshot(snapshot):
 
 def require_android(config):
     if config["लक्ष्य"] != "एंड्रॉयड":
-        raise StudioError("डेस्कटॉप और वेब निर्माण अगले चरण में आएँगे। अभी एंड्रॉयड लक्ष्य चुनें।")
+        raise StudioError("एंड्रॉयड निर्माण के लिए एंड्रॉयड परियोजना खोलें।")

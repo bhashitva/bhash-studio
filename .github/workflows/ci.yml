@@ -70,6 +70,10 @@ jobs:
           with ZipFile(wheels[0]) as archive:
               names = archive.namelist()
               assert "bhash_studio/BhashStudioLauncher.java" in names
+              assert "bhash_studio/web_starter.bhash" in names
+              assert "bhash_studio/web_starter.html" in names
+              assert "bhash_studio/web_starter.js" in names
+              assert "bhash_studio/web_starter.css" in names
               assert "bhash_studio/__main__.py" in names
               entry = next(name for name in names if name.endswith(".dist-info/entry_points.txt"))
               assert "bhash-studio = bhash_studio.app:main" in archive.read(entry).decode()
@@ -118,6 +122,11 @@ jobs:
             https://github.com/bhashitva/bhash/releases/download/bhash-0.25.0/bhash-compiler-0.25.0.jar \
             --output "$BHASH_COMPILER_JAR"
           echo "9e353b85365c50367ec008486d8ef83eeeb550a1dd9dbcc9d889f79dab904162  $BHASH_COMPILER_JAR" | sha256sum --check
+      - name: Build and exercise a real web application
+        if: matrix.api == 29
+        env:
+          BHASH_STUDIO_WEB_TESTS: '1'
+        run: python -m unittest discover -s tests -p test_web.py -v
       - name: Install pinned Android build components
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \

@@ -30,6 +30,10 @@ CONFIG = "परियोजना.भाषविन्यास"
 LAYOUT = "पर्दा.भाषदृश्य"
 SOURCE = "मुख्य.bhash"
 FILES = (CONFIG, LAYOUT, SOURCE)
+WEB_PAGE = "index.html"
+WEB_PROFILES = "परिवेश.json"
+WEB_ASSETS = "assets"
+WEB_FILES = (CONFIG, SOURCE, WEB_PAGE, WEB_PROFILES)
 BUILD_DIRECTORY = "bhash-studio-builds"
 BUILD_ID = re.compile(r"[0-9a-f]{16}")
 SCRATCH_DIRECTORY = ".studio"
@@ -52,6 +56,14 @@ def digest(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def project_files(config_text):
+    try:
+        config = loads(config_text)
+    except StudioError:
+        return FILES
+    return WEB_FILES if isinstance(config, dict) and config.get("लक्ष्य") == "वेब" else FILES
+
+
 def atomic_write(file, text):
     temp = None
     try:
@@ -71,23 +83,41 @@ class Project:
     root: Path
 
     @classmethod
-    def create(cls, directory, name):
+    def create(cls, directory, name, target="एंड्रॉयड", profiles=None):
         root = LocalPath(directory).expanduser().absolute()
         config = {
-            "योजना_संस्करण": 1, "नाम": name, "लक्ष्य": "एंड्रॉयड",
+            "योजना_संस्करण": 1, "नाम": name, "लक्ष्य": target,
             "ऐप_पहचान": "org.bhashitva.app" + uuid.uuid4().hex,
             "न्यूनतम_एंड्रॉयड_स्तर": 29, "संजाल_अनुमति": False,
             "प्रारंभिक_मान": None,
         }
         validate_config(config)
+        if target == "वेब":
+            from .web import DEFAULT_PROFILES, validate_profiles
+
+            profiles = validate_profiles(DEFAULT_PROFILES if profiles is None else profiles)
+            resources = Path(__file__).parent
+            initial = {
+                SOURCE: (resources / "web_starter.bhash").read_text(encoding="utf-8"),
+                WEB_PAGE: (resources / "web_starter.html").read_text(encoding="utf-8"),
+                WEB_PROFILES: dumps(profiles) + "\n",
+                f"{WEB_ASSETS}/app.css": (resources / "web_starter.css").read_text(encoding="utf-8"),
+                f"{WEB_ASSETS}/app.js": (resources / "web_starter.js").read_text(encoding="utf-8"),
+            }
+        elif target == "एंड्रॉयड":
+            initial = {LAYOUT: DEFAULT_LAYOUT, SOURCE: DEFAULT_SOURCE}
+        else:
+            raise StudioError("नई परियोजना के लिए एंड्रॉयड या वेब चुनें।")
         if root.exists() or root.is_symlink():
             raise StudioError("यह फ़ोल्डर पहले से मौजूद है। नया फ़ोल्डर नाम चुनें।")
         # Publish the project only after all initial files have been written.
         with tempfile.TemporaryDirectory(prefix="bhash-new-", dir=root.parent) as staging:
             folder = Path(staging) / "project"
             folder.mkdir()
-            for filename, content in zip(FILES, (dumps(config) + "\n", DEFAULT_LAYOUT, DEFAULT_SOURCE)):
-                atomic_write(folder / filename, content)
+            for filename, content in {CONFIG: dumps(config) + "\n", **initial}.items():
+                path = folder / filename
+                path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write(path, content)
             if root.exists() or root.is_symlink():
                 raise StudioError("यह फ़ोल्डर पहले से मौजूद है। नया फ़ोल्डर नाम चुनें।")
             folder.rename(root)
@@ -105,7 +135,7 @@ class Project:
         else:
             raise StudioError(f"परियोजना फ़ोल्डर नहीं मिला — {selected.absolute()}")
         project = cls(root.resolve())
-        for filename in FILES:
+        for filename in project_files(project.read(CONFIG))[1:]:
             project.read(filename)
         return project
 
@@ -180,7 +210,9 @@ class Project:
         return digest(text)
 
     def snapshot(self):
-        files = {filename: self.read(filename) for filename in FILES}
+        config = self.read(CONFIG)
+        files = {CONFIG: config}
+        files.update((filename, self.read(filename)) for filename in project_files(config)[1:])
         files.update(self.source_snapshot({SOURCE: files[SOURCE]}))
         return files
 
