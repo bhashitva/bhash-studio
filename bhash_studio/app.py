@@ -10,6 +10,7 @@ from textwrap import fill
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
+import webbrowser
 
 from .android import AndroidTarget, Toolchain
 from .bhash_syntax import COMMON_KEYWORDS, CONSTRUCTS, check_syntax
@@ -23,6 +24,7 @@ from .project_tree import ProjectTree
 from .settings import (load_project_session, load_session, load_settings,
                        save_project_session, save_session, save_settings, settings_path)
 from .targets import validate_snapshot
+from .signature_help import LanguageServer
 
 
 APP_NAME = "भाष यंत्र"
@@ -112,6 +114,8 @@ class Studio:
     def __init__(self, root, project=None, tools=None, settings_file=None, compiler_override=None):
         self.root = root
         self.syntax_pool = ThreadPoolExecutor(max_workers=1)
+        self.signature_pool = ThreadPoolExecutor(max_workers=1)
+        self.language_server = LanguageServer()
         enable_hindi_input(root)
         self.project = None
         self.buffers = {}
@@ -222,6 +226,7 @@ class Studio:
         source_mode = Path(filename).suffix == ".bhash"
         editor = BhashEditor(frame, syntax_check=self.submit_syntax,
                              compiler_path=lambda: self.compiler_override or self.tools.compiler,
+                             signature_check=lambda caret, site: self.submit_signature(filename, caret, site),
                              undo=True, wrap="none", font=("Nirmala UI", 13),
                              padx=12, pady=12, background="#f7f9fc", foreground="#182d43", insertwidth=2)
         vertical = ttk.Scrollbar(frame, orient="vertical", command=editor.yview)
@@ -235,7 +240,7 @@ class Studio:
         if source_mode:
             status = ttk.Label(frame, textvariable=editor.syntax_status, width=1)
             status.grid(row=2, column=0, sticky="ew")
-            editor.bind("<Configure>", lambda event: status.configure(wraplength=event.width))
+            self.add_signature_panel(frame, editor, status)
         editor.bind("<Control-a>", self.select_all)
         state = self.file_states.get(filename, {})
         editor.open_buffer(state.get("text", self.buffers[filename]), source_mode)
@@ -251,6 +256,47 @@ class Studio:
     def submit_syntax(self, source):
         tools = replace(self.tools, compiler=self.compiler_override) if self.compiler_override else self.tools
         return self.syntax_pool.submit(check_syntax, tools, source)
+
+    def submit_signature(self, filename, caret, site):
+        tools = replace(self.tools, compiler=self.compiler_override) if self.compiler_override else self.tools
+        buffers = {name: self.file_text(name) for name in self.editors if name.endswith(".bhash")}
+        return self.signature_pool.submit(self.language_server.help, tools, self.project, filename, buffers, caret, site)
+
+    def add_signature_panel(self, frame, editor, status):
+        panel = ttk.Frame(frame, padding=(6, 4))
+        panel.grid(row=3, column=0, sticky="ew")
+        panel.columnconfigure(0, weight=1)
+        text = ttk.Label(panel, justify="left", width=1)
+        text.grid(row=0, column=0, sticky="ew")
+        link = ttk.Button(panel, text="GitHub संदर्भ")
+        link.grid(row=1, column=0, sticky="w")
+        panel.grid_remove()
+
+        def display(help):
+            if not help:
+                panel.grid_remove()
+                return
+            lines = list(help.signatures[:4])
+            if len(help.signatures) > 4:
+                lines.append(f"और {len(help.signatures) - 4} रूप")
+            if help.parameter:
+                lines.append(f"वर्तमान मापदंड — {help.parameter}")
+            if help.description:
+                lines.append(help.description)
+            text.configure(text="\n".join(lines))
+            if help.url:
+                link.configure(command=lambda: webbrowser.open(help.url))
+                link.grid()
+            else:
+                link.grid_remove()
+            panel.grid()
+
+        def wrap(event):
+            status.configure(wraplength=event.width)
+            text.configure(wraplength=max(1, event.width - 12))
+
+        editor.signature_display = display
+        editor.bind("<Configure>", wrap)
 
     def restore_view(self, editor, state):
         editor.unbind("<Map>")
@@ -733,6 +779,8 @@ class Studio:
         if event.widget is self.root:
             self.root.after_cancel(self.poll_timer)
             self.syntax_pool.shutdown(wait=False, cancel_futures=True)
+            self.signature_pool.submit(self.language_server.close)
+            self.signature_pool.shutdown(wait=False)
 
     def close(self):
         if self.closing:

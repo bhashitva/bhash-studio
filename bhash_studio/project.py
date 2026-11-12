@@ -175,6 +175,11 @@ class Project:
 
     def snapshot(self):
         files = {filename: self.read(filename) for filename in FILES}
+        files.update(self.source_snapshot({SOURCE: files[SOURCE]}))
+        return files
+
+    def source_snapshot(self, overlays):
+        files = dict(overlays)
         directories = [self.root]
         while directories:
             for path in sorted(directories.pop().iterdir()):

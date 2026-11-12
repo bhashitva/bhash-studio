@@ -7,10 +7,11 @@ import tkinter as tk
 
 from .bhash_syntax import analyze, standard_library
 from .errors import StudioError
+from .signature_help import call_site
 
 
 class BhashEditor(tk.Text):
-    def __init__(self, parent, syntax_check=None, compiler_path=None, **options):
+    def __init__(self, parent, syntax_check=None, compiler_path=None, signature_check=None, **options):
         super().__init__(parent, exportselection=False, **options)
         self.source_mode = False
         self.pending = None
@@ -18,6 +19,10 @@ class BhashEditor(tk.Text):
         self.completion = None
         self.syntax_check = syntax_check
         self.compiler_path = compiler_path
+        self.signature_check = signature_check
+        self.signature_display = None
+        self.signature_timer = None
+        self.signature_future = None
         self.syntax_status = tk.StringVar(self)
         self.syntax_timer = None
         self.syntax_future = None
@@ -41,9 +46,15 @@ class BhashEditor(tk.Text):
             self.bind(sequence, self.dismiss)
         self.bind("<Destroy>", self.cancel_refresh)
         self.bind("<Destroy>", self.cancel_syntax, add=True)
+        self.bind("<Destroy>", self.cancel_signature, add=True)
+        self.bind("<Escape>", self.hide_signature, add=True)
+        for sequence in ("<ButtonRelease-1>", "<KeyRelease-Left>", "<KeyRelease-Right>",
+                         "<KeyRelease-Up>", "<KeyRelease-Down>", "<KeyRelease-Home>", "<KeyRelease-End>"):
+            self.bind(sequence, self.schedule_signature, add=True)
 
     def open_buffer(self, text, source_mode):
         self.dismiss()
+        self.hide_signature()
         self.source_mode = source_mode
         self.replace("1.0", "end-1c", text)
         self.mark_set("insert", "1.0")
@@ -59,6 +70,7 @@ class BhashEditor(tk.Text):
         self.dismiss()
         if self.source_mode:
             self.schedule_syntax()
+            self.schedule_signature()
             self.cancel_refresh()
             self.suggest_after_edit = True
             self.pending = self.after(120, self.refresh_after_edit)
@@ -70,6 +82,43 @@ class BhashEditor(tk.Text):
         if self.syntax_future is not None:
             self.syntax_future.cancel()
             self.syntax_future = None
+
+    def cancel_signature(self, _event=None):
+        if self.signature_timer is not None:
+            self.after_cancel(self.signature_timer)
+            self.signature_timer = None
+        if self.signature_future is not None:
+            self.signature_future.cancel()
+            self.signature_future = None
+
+    def hide_signature(self, _event=None):
+        self.cancel_signature()
+        if self.signature_display:
+            self.signature_display(None)
+
+    def schedule_signature(self, _event=None):
+        self.cancel_signature()
+        if self.source_mode and self.signature_check and self.signature_display:
+            self.signature_timer = self.after(160, self.start_signature)
+
+    def start_signature(self):
+        self.signature_timer = None
+        source = self.get("1.0", "end-1c")
+        caret = len(self.get("1.0", "insert"))
+        site = call_site(source, caret)
+        if not site:
+            self.hide_signature()
+            return
+        self.signature_future = self.signature_check(caret, site)
+        self.finish_signature()
+
+    def finish_signature(self):
+        self.signature_timer = None
+        if not self.signature_future.done():
+            self.signature_timer = self.after(60, self.finish_signature)
+            return
+        future, self.signature_future = self.signature_future, None
+        self.signature_display(future.result())
 
     def schedule_syntax(self):
         self.cancel_syntax()
@@ -156,6 +205,7 @@ class BhashEditor(tk.Text):
 
     def complete_now(self, _event):
         self.refresh(show=True)
+        self.schedule_signature()
         return "break"
 
     def dismiss(self, _event=None):
@@ -212,3 +262,4 @@ class BhashEditor(tk.Text):
         self.edit_modified(False)
         self.refresh()
         self.schedule_syntax()
+        self.schedule_signature()

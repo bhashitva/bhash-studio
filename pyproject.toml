@@ -21,4 +21,4 @@ bhash-studio = "bhash_studio.app:main"
 packages = ["bhash_studio"]
 
 [tool.setuptools.package-data]
-bhash_studio = ["BhashStudioLauncher.java"]
+bhash_studio = ["BhashStudioLauncher.java", "stdlib_reference.json"]
