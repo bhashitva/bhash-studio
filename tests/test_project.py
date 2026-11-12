@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from bhash_studio.config import dumps, loads
 from bhash_studio.errors import StudioError
-from bhash_studio.project import CONFIG, SOURCE, FILES, Project, LocalPath, digest
+from bhash_studio.project import BUILD_DIRECTORY, CONFIG, SOURCE, FILES, Project, LocalPath, digest
 
 
 class ProjectTests(unittest.TestCase):
@@ -97,6 +97,22 @@ class ProjectTests(unittest.TestCase):
         old = project.read(SOURCE)
         project.save(SOURCE, old + "\n", digest(old))
         self.assertEqual(Project.open(project.root).read(SOURCE), old + "\n")
+
+    def test_build_cleanup_removes_long_children_under_a_short_root(self):
+        name = "0123456789abcdef"
+        output = self.project.root / BUILD_DIRECTORY
+        job = output / name
+        if os.name == "nt":
+            self.addCleanup(shutil.rmtree, output.extended_path())
+        nested = job / "android" / "app" / "build" / ("intermediate_" * 10) / ("bucket_" * 15)
+        nested.mkdir(parents=True)
+        (nested / "result.dex").write_bytes(b"test")
+        self.assertLess(len(str(job)), 248)
+        self.assertGreater(len(str(nested)), 260)
+        self.assertEqual(self.project.previous_builds(), [name])
+        self.assertTrue(self.project.remove_build(name))
+        self.assertFalse(job.exists())
+        self.assertTrue(output.is_dir())
 
     def test_symlink_files_are_rejected(self):
         outside = Path(self.temp.name) / "outside"

@@ -17,8 +17,11 @@ class LocalPath(type(Path())):
     """Use Windows extended paths for filesystem calls, retaining readable display paths."""
 
     def __fspath__(self):
+        return self.extended_path() if len(str(self)) >= 248 else str(self)
+
+    def extended_path(self):
         text = str(self)
-        if os.name == "nt" and self.is_absolute() and len(text) >= 248 and not text.startswith("\\\\?\\"):
+        if os.name == "nt" and self.is_absolute() and not text.startswith("\\\\?\\"):
             return "\\\\?\\UNC\\" + text[2:] if text.startswith("\\\\") else "\\\\?\\" + text
         return text
 
@@ -190,7 +193,8 @@ class Project:
     @staticmethod
     def is_build_output(path):
         return (path.is_dir() and not path.is_symlink() and path.resolve() == path
-                and any((path / marker).is_file() for marker in ("tool-output.log", "build-inputs.json", "compiler.jar")))
+                and (any((path / marker).is_file() for marker in ("tool-output.log", "build-inputs.json", "compiler.jar"))
+                     or (path / "android" / "app" / "build").is_dir()))
 
     def remove_build(self, name):
         if not BUILD_ID.fullmatch(name):
@@ -200,7 +204,9 @@ class Project:
             return False
         if not self.is_build_output(path):
             raise StudioError("निर्माण फ़ोल्डर का मार्ग बदल गया है।")
-        shutil.rmtree(path)
+        # rmtree passes the root's string form to its recursive calls. A
+        # short root still needs the prefix when Gradle created long children.
+        shutil.rmtree(LocalPath(path).extended_path())
         return True
 
     def source_snapshot(self, overlays):
