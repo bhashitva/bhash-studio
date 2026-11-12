@@ -4,10 +4,17 @@ from tempfile import TemporaryDirectory
 from unicodedata import normalize
 from zipfile import ZipFile
 
-from bhash_studio.bhash_syntax import analyze, standard_imports, standard_library
+from bhash_studio.bhash_syntax import analyze, display_diagnostic, standard_imports, standard_library
 
 
 class BhashSyntaxTests(unittest.TestCase):
+    def test_diagnostic_displays_devanagari_in_expected_tokens(self):
+        message = r"extraneous input '\u0938' expecting {'\u092B\u0932\u0928', IDENTIFIER, '\\u0938', '\u000A'}"
+        self.assertEqual(display_diagnostic(message),
+                         r"extraneous input '\u0938' expecting {'फलन', IDENTIFIER, '\\u0938', '\u000A'}")
+        source_only = r"no viable alternative at input 'x expecting {\u0938}'"
+        self.assertEqual(display_diagnostic(source_only), source_only)
+
     def test_imported_member_completion_and_aliases(self):
         methods = {"पाठ्य": ("लंबाई", "अंश")}
         for declaration, receiver in (("आयात मानक.पाठ्य;", "पाठ्य"), ("आयात मानक.पाठ्य उपनाम प;", "प")):

@@ -206,6 +206,17 @@ def complete_member(source, caret, methods, excluded):
     return Completion(match.start(2), caret + len(tail), options) if options else None
 
 
+def display_diagnostic(message):
+    # ANTLR's vocabulary escapes Devanagari in expected tokens. Leave the
+    # offending source text and any literal backslashes in the message intact.
+    before, separator, expected = message.rpartition(" expecting ")
+    if not separator or not re.fullmatch(r"\{.*\}|'[^']*'", expected):
+        return message
+    readable = re.sub(r"(?<!\\)\\u(09[0-7][0-9a-fA-F])",
+                      lambda match: chr(int(match[1], 16)), expected)
+    return before + separator + readable
+
+
 def check_syntax(tools, source):
     """Check an unsaved UTF-8 buffer using the compiler's syntax-only command."""
     tools.validate()
@@ -227,7 +238,7 @@ def check_syntax(tools, source):
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     diagnostics = tuple(
-        (int(match[1]), int(match[2]), match[3])
+        (int(match[1]), int(match[2]), display_diagnostic(match[3]))
         for match in re.finditer(r"^.*buffer\.bhash:(\d+):(\d+):\s*([^\r\n]+)", result.stdout, re.MULTILINE)
     )
     if result.returncode and not diagnostics:
