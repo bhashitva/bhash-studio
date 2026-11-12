@@ -127,6 +127,14 @@ jobs:
         env:
           BHASH_STUDIO_WEB_TESTS: '1'
         run: python -m unittest discover -s tests -p test_web.py -v
+      - name: Break, step, and edit a live Bhash HTTP request
+        if: matrix.api == 29
+        env:
+          BHASH_STUDIO_DEBUG_TESTS: '1'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lldb-18
+          PATH="/usr/lib/llvm-18/bin:$PATH" xvfb-run -a python -m unittest discover -s tests -p test_debug.py -v
       - name: Install pinned Android build components
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \

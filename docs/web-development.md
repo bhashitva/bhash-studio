@@ -58,11 +58,33 @@ shared data store and a coordinated migration process.
 
 - The starter's HTML and JavaScript can be debugged today with browser DevTools.
   Set breakpoints in Sources and inspect the requests in Network.
-- Bhash's native backend emits original `.bhash` locations and DWARF with
-  `--target native --debug`. The project already documents a
-  [VS Code and GDB integration](https://github.com/bhashitva/bhash/blob/main/docs/native-vscode-debug.md).
-  A Yantra integration can reuse that approach through the Debug Adapter
-  Protocol and map temporary build source paths back to project tabs.
+- Install LLVM with its native compiler and LLDB Debug Adapter. Put Clang on
+  `PATH`, or configure the Bhash compiler's native toolchain. On Windows use
+  a Windows native toolchain such as LLVM-MinGW. On Linux and WSL install
+  LLVM/Clang and LLDB in the same environment where Yantra runs. Yantra
+  recognizes `lldb-dap`, `lldb-dap-18`, and `lldb-vscode-18` on `PATH`.
+  You can also select the adapter under **औज़ार सेटिंग** or set `BHASH_LLDB_DAP`.
+- Place the cursor on an executable server-side Bhash line and press **F9**
+  or select **वेब → विराम बिंदु लगाएँ या हटाएँ**. Start with
+  **वेब → स्रोत डिबगिंग शुरू करें**, then open the browser and trigger that
+  handler. The debugger builds a native executable with DWARF and keeps
+  the compiled source tabs read-only during the session. The usual JVM
+  Run and deployment bundle are available separately.
+- At a stop, select a call frame to inspect its variables and jump to source.
+  Use **अगली पंक्ति**, **अंदर जाएँ**, **बाहर आएँ**, or **जारी रखें**. A paused
+  request waits until execution resumes. If a line has no executable code,
+  the adapter may move the breakpoint or report it as unverified.
+- Select a supported scalar local or parameter and use **मान बदलें…**.
+  Yantra accepts integer, byte, decimal, or boolean literals where LLDB
+  exposes those types and supports writes. Compound values can be inspected
+  to the extent LLDB exposes them. Managed text and objects may appear as
+  native references. Yantra does not write managed references or evaluate
+  arbitrary debugger expressions.
+- The debug server binds to loopback and uses the dev port with its own
+  database under `.studio/web-data/debug`. Stop it through **वेब → वेब काम रोकें**.
+  Native source stepping across Bhash protected callbacks can follow
+  compiler-generated frames. Set a breakpoint inside a protected body when
+  you need to inspect its locals.
 - The Yantra web workflow currently builds a JVM JAR. In a Bhash 0.25.0
   starter build, `javap -v` showed line tables for `BhashProgram.java` and no
   source mapping attribute on the entry-point class. Original-source JVM

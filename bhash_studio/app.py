@@ -16,6 +16,8 @@ from .android import AndroidTarget, Toolchain
 from .bhash_syntax import CONSTRUCTS, KEYWORDS, check_syntax
 from .clipboard import COMMANDS, ReadOnlyText, clipboard_action, enable_clipboard
 from .config import loads
+from .debug import DebugEvent, WebDebugger, adapter_path, scalar_value
+from .debug_view import DebugView
 from .editor import BhashEditor
 from .errors import StudioError
 from .keyboard import enable_hindi_input
@@ -129,6 +131,10 @@ class Studio:
         self.project = None
         self.buffers = {}
         self.web_port = None
+        self.debug_commands = None
+        self.debug_sources = set()
+        self.debug_location = None
+        self.breakpoints = {}
         self.hashes = {}
         self.active = None
         self.editors = {}
@@ -182,6 +188,7 @@ class Studio:
         ]
         self.preview = tk.Frame(right, background="#ffffff", padx=20, pady=20)
         self.preview.pack(fill="both", expand=True, padx=(12, 0), pady=6)
+        self.debug_view = DebugView(right, self.show_debug_line, self.send_debug, self.edit_debug_variable)
         ttk.Label(root, text="कार्य विवरण").pack(anchor="w", padx=18)
         self.output = ReadOnlyText(root, height=5, wrap="word", font=("Nirmala UI", 11), padx=10)
         self.output.pack(fill="x", padx=14, pady=(4, 10))
@@ -270,6 +277,12 @@ class Studio:
             self.add_signature_panel(frame, editor)
         state = self.file_states.get(filename, {})
         editor.open_buffer(state.get("text", self.buffers[filename]), source_mode)
+        if source_mode:
+            editor.tag_configure("breakpoint", background="#ffe3e3")
+            editor.tag_configure("debug_line", background="#ffeb9a")
+            self.mark_debug_lines(filename, editor)
+            if filename in self.debug_sources:
+                editor.configure(state="disabled")
         cursor = state.get("cursor")
         if isinstance(cursor, str):
             editor.mark_set("insert", cursor)
@@ -395,6 +408,8 @@ class Studio:
 
         web_menu = dropdown("वेब")
         add(web_menu, "web_run", "स्थानीय सर्वर चलाएँ", lambda: self.start_web(True))
+        add(web_menu, "web_debug", "स्रोत डिबगिंग शुरू करें", self.start_debug)
+        add(web_menu, "web_breakpoint", "विराम बिंदु लगाएँ या हटाएँ", self.toggle_breakpoint, "<F9>", "F9")
         add(web_menu, "web_browser", "ब्राउज़र में खोलें", self.open_web_preview)
         add(web_menu, "web_export", "तैनाती बंडल बनाएँ…", lambda: self.start_web(False))
         add(web_menu, "web_stop", "वेब काम रोकें", self.cancel.set)
@@ -415,8 +430,11 @@ class Studio:
                 enabled = busy and web
             elif key == "web_browser":
                 enabled = web and busy and self.web_port is not None
-            elif key in {"web_run", "web_export"}:
+            elif key in {"web_run", "web_export", "web_debug"}:
                 enabled = web and ready
+            elif key == "web_breakpoint":
+                enabled = web and bool(self.active and self.active.endswith(".bhash")) and (
+                    self.debug_commands is None or self.active in self.debug_sources)
             elif key in {"files", "new_file", "import_file"}:
                 enabled = self.project is not None
             elif key == "close_tab":
@@ -492,7 +510,8 @@ class Studio:
         self.active = next((name for name, editor in self.editors.items() if str(editor.master) == page), None)
         self.selected_file.set(self.active or "")
         for helper in self.helpers:
-            helper.configure(state="normal" if self.editor and self.editor.source_mode else "disabled")
+            helper.configure(state="normal" if self.editor and self.editor.source_mode
+                             and self.active not in self.debug_sources else "disabled")
         self.update_menu_state()
 
     def close_tab(self, filename=None):
@@ -676,6 +695,8 @@ class Studio:
     def trash_files(self, names):
         if not self.project or not names or self.closing:
             return
+        if self.debug_commands is not None:
+            raise StudioError("फ़ाइलें हटाने से पहले डिबग सत्र रोकें।")
         paths = [(name, self.project.file(name)) for name in names]
         for name, path in paths:
             if not path.is_file():
@@ -697,6 +718,7 @@ class Studio:
             count += 1
             if name in self.editors:
                 self.forget_tab(name)
+            self.breakpoints.get(self.project.root, {}).pop(name, None)
             required = name in self.required_files()
             self.buffers.pop(name, None)
             self.hashes.pop(name, None)
@@ -824,12 +846,14 @@ class Studio:
         dialog = Form(self.root, "औज़ार सेटिंग", [("compiler", "आधिकारिक भाष कंपाइलर की जार फ़ाइल", self.tools.compiler),
                       ("java", "जावा कार्यक्रम", self.tools.java),
                       ("sdk", "एंड्रॉयड औज़ार फ़ोल्डर", self.tools.sdk),
-                      ("device", "उपकरण की पहचान — वैकल्पिक", self.device)],
-                      paths={"compiler": jar_file, "java": java_program, "sdk": None})
+                      ("device", "उपकरण की पहचान — वैकल्पिक", self.device),
+                      ("debugger", "LLDB डिबग अडैप्टर — वैकल्पिक", self.tools.debugger)],
+                      paths={"compiler": jar_file, "java": java_program, "sdk": None,
+                             "debugger": lambda path: path.name.lower().startswith(("lldb-dap", "lldb-vscode"))})
         self.root.wait_window(dialog)
         if dialog.result:
             values = dialog.result
-            tools = Toolchain(values["compiler"], values["java"], values["sdk"])
+            tools = Toolchain(values["compiler"], values["java"], values["sdk"], values["debugger"])
             save_settings(self.settings_file, tools, values["device"])
             self.tools = tools
             self.device = values["device"]
@@ -904,6 +928,130 @@ class Studio:
         if self.worker is not None and self.web_port is not None:
             webbrowser.open(f"http://127.0.0.1:{self.web_port}/")
 
+    def mark_debug_lines(self, filename, editor):
+        editor.tag_remove("breakpoint", "1.0", "end")
+        editor.tag_remove("debug_line", "1.0", "end")
+        if self.project:
+            for line in self.breakpoints.get(self.project.root, {}).get(filename, ()):
+                editor.tag_add("breakpoint", f"{line}.0", f"{line + 1}.0")
+        if self.debug_location and self.debug_location[0] == filename:
+            line = self.debug_location[1]
+            editor.tag_add("debug_line", f"{line}.0", f"{line + 1}.0")
+
+    def toggle_breakpoint(self):
+        filename = self.active
+        if self.required_files() != WEB_FILES or not filename or not filename.endswith(".bhash"):
+            return
+        editor = self.editors[filename]
+        line = int(editor.index("insert").split(".")[0])
+        lines = self.breakpoints.setdefault(self.project.root, {}).setdefault(filename, set())
+        if line in lines:
+            lines.remove(line)
+        else:
+            lines.add(line)
+        self.mark_debug_lines(filename, editor)
+        if self.debug_commands is not None:
+            self.send_debug("setBreakpoints", None, filename, sorted(lines))
+
+    def show_debug_line(self, filename, line):
+        previous = self.debug_location
+        self.debug_location = (filename, line)
+        if previous and previous[0] in self.editors:
+            self.mark_debug_lines(previous[0], self.editors[previous[0]])
+        self.select_file(filename)
+        editor = self.editors[filename]
+        self.mark_debug_lines(filename, editor)
+        editor.mark_set("insert", f"{line}.0")
+        editor.see(f"{line}.0")
+
+    def send_debug(self, command, stop_id, *arguments):
+        if self.debug_commands is not None:
+            self.debug_commands.put((command, stop_id, arguments))
+
+    def edit_debug_variable(self, stop_id, node, reference, variable):
+        dialog = Form(self.root, "डिबग मान बदलें", [("value", variable["name"],
+                      variable.get("value", ""))], "मान बदलें")
+        self.root.wait_window(dialog)
+        if dialog.result and stop_id == self.debug_view.stop_id:
+            value = scalar_value(variable, dialog.result["value"])
+            if value is None:
+                self.log("चर के प्रकार के अनुसार संख्या, सत्य या असत्य लिखें।")
+            else:
+                self.send_debug("setVariable", stop_id, node, reference, variable, value)
+
+    def start_debug(self):
+        if self.worker is not None:
+            raise StudioError("पहला कार्य पूरा होने दें या उसे रोकें।")
+        adapter = adapter_path(self.tools.debugger)
+        snapshot = self.validate()
+        _, profiles = validate_web(snapshot)
+        port = profiles["dev"]["port"]
+        project = self.project
+        tools = replace(self.tools, compiler=self.compiler_override) if self.compiler_override else self.tools
+        self.debug_commands = queue.Queue()
+        commands = self.debug_commands
+        self.debug_sources = {name for name in snapshot if name.endswith(".bhash")}
+        breakpoints = {name: sorted(lines) for name, lines in self.breakpoints.get(project.root, {}).items()
+                       if name in self.debug_sources and lines}
+        for name, editor in self.editors.items():
+            if name in self.debug_sources:
+                editor.configure(state="disabled")
+        self.preview.pack_forget()
+        self.debug_view.reset("डिबग सर्वर बन रहा है…")
+        self.debug_view.pack(fill="both", expand=True, padx=12, pady=6)
+        self.tab_changed()
+
+        def work():
+            try:
+                target = WebTarget(tools)
+                executable = target.build(project, snapshot, "dev", self.cancel, self.messages.put, debug=True)
+                debugger = WebDebugger(executable, executable.parent.parent / "src", adapter,
+                                       target.local_arguments(project, port, "debug"), port, breakpoints,
+                                       self.cancel, self.messages.put)
+                debugger.commands = commands
+                debugger.run()
+            except (StudioError, OSError) as error:
+                self.messages.put(str(error))
+
+        self.start_worker(work)
+
+    def debug_event(self, event):
+        if event.kind == "output":
+            self.log(event.value.rstrip())
+        elif event.kind == "ready":
+            self.web_port = event.value
+            self.log(f"डिबग सर्वर तैयार है — http://127.0.0.1:{self.web_port}/")
+            self.update_menu_state()
+        elif event.kind == "running":
+            self.debug_location = None
+            for filename, editor in self.editors.items():
+                self.mark_debug_lines(filename, editor)
+            self.debug_view.reset("डिबग सर्वर चल रहा है")
+        elif event.kind == "stopped":
+            self.debug_view.stopped(*event.value)
+        elif event.kind == "scopes":
+            self.debug_view.show_scopes(*event.value)
+        elif event.kind == "variables":
+            self.debug_view.show_variables(*event.value)
+        elif event.kind == "edited":
+            self.debug_view.edited(*event.value)
+        elif event.kind == "idle":
+            self.debug_view.update_buttons()
+
+    def finish_debug(self):
+        self.debug_commands = None
+        self.debug_location = None
+        for filename, editor in self.editors.items():
+            if filename in self.debug_sources:
+                if not self.closing:
+                    editor.configure(state="normal")
+                self.mark_debug_lines(filename, editor)
+        self.debug_sources.clear()
+        self.debug_view.reset("डिबग सत्र समाप्त")
+        self.debug_view.pack_forget()
+        self.preview.pack(fill="both", expand=True, padx=(12, 0), pady=6)
+        self.tab_changed()
+
     def start_worker(self, action):
         self.cancel.clear()
 
@@ -925,11 +1073,15 @@ class Studio:
                 if message is None:
                     self.worker = None
                     self.web_port = None
+                    if self.debug_commands is not None:
+                        self.finish_debug()
                     self.update_menu_state()
                     self.guard(self.explorer.refresh)
                 elif isinstance(message, int):
                     self.web_port = message
                     self.update_menu_state()
+                elif isinstance(message, DebugEvent):
+                    self.guard(lambda: self.debug_event(message))
                 else:
                     self.log(message)
         except queue.Empty:
