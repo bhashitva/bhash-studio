@@ -1,0 +1,300 @@
+"""Source-level web debugging through the LLDB Debug Adapter Protocol."""
+
+from dataclasses import dataclass
+from collections import deque
+import ctypes
+import json
+import math
+import os
+from pathlib import Path
+import queue
+import re
+import shutil
+import subprocess
+import threading
+import time
+
+from .errors import StudioError
+
+
+@dataclass
+class DebugEvent:
+    kind: str
+    value: object = None
+
+
+def adapter_path(configured=""):
+    command = (configured or os.environ.get("BHASH_LLDB_DAP") or shutil.which("lldb-dap")
+               or shutil.which("lldb-dap-18") or shutil.which("lldb-vscode-18"))
+    if not command or not Path(command).is_file():
+        raise StudioError("डिबगिंग के लिए LLDB डिबग अडैप्टर स्थापित करें और औज़ार सेटिंग में उसका मार्ग चुनें।")
+    return str(Path(command).resolve())
+
+
+def read_message(stream):
+    headers = {}
+    while True:
+        line = stream.readline(4096)
+        if not line:
+            return None
+        if line in (b"\r\n", b"\n"):
+            break
+        key, separator, value = line.partition(b":")
+        if not separator or not line.endswith(b"\n"):
+            raise ValueError("Invalid DAP header")
+        headers[key.lower()] = value.strip()
+    length = int(headers.get(b"content-length", b"0"))
+    if not 0 < length <= 16 * 1024 * 1024:
+        raise ValueError("Invalid DAP message length")
+    payload = stream.read(length)
+    if len(payload) != length:
+        raise EOFError("Incomplete DAP message")
+    return json.loads(payload)
+
+
+def scalar_value(variable, text):
+    """Accept only bounded primitive values for the adapter's setVariable request."""
+    if variable.get("variablesReference") or "readOnly" in variable.get("presentationHint", {}).get("attributes", ()):
+        return None
+    kind = variable.get("type", "")
+    text = text.strip().translate(str.maketrans("०१२३४५६७८९", "0123456789"))
+    if len(text) > 64:
+        return None
+    if kind in {"bool", "_Bool", "तार्किक"}:
+        return {"true": "true", "false": "false", "सत्य": "true", "असत्य": "false"}.get(text)
+    if kind in {"double", "दशमलव"}:
+        if re.fullmatch(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", text):
+            return repr(float(text)) if math.isfinite(float(text)) else None
+        return None
+    if kind in {"पूर्णांक", "int64_t", "long long", "long long int", "long", "long int"}:
+        low, high = -(2 ** 63), 2 ** 63 - 1
+    elif kind in {"बाइट", "unsigned char", "uint8_t"}:
+        low, high = 0, 255
+    else:
+        return None
+    if re.fullmatch(r"[+-]?[0-9]+", text) and low <= int(text) <= high:
+        return str(int(text))
+    return None
+
+
+class WebDebugger:
+    def __init__(self, executable, sources, adapter, arguments, port, breakpoints, cancel, emit):
+        self.executable = executable
+        self.sources = sources
+        self.adapter = adapter
+        self.arguments = arguments
+        self.port = port
+        self.breakpoints = breakpoints
+        self.cancel = cancel
+        self.emit = emit
+        self.inbox = queue.Queue()
+        self.commands = queue.Queue()
+        self.responses = {}
+        self.events = deque()
+        self.seq = 0
+        self.thread = None
+        self.stop_id = 0
+        self.terminated = False
+        self.ready = False
+        self.output_tail = ""
+        self.inferior_handle = None
+
+    def _read(self):
+        try:
+            while message := read_message(self.process.stdout):
+                self.inbox.put(message)
+        except (OSError, ValueError, EOFError) as error:
+            self.inbox.put(error)
+        finally:
+            self.inbox.put(None)
+
+    def _send(self, message):
+        self.seq += 1
+        payload = json.dumps({"seq": self.seq, **message}).encode("utf-8")
+        self.process.stdin.write(f"Content-Length: {len(payload)}\r\n\r\n".encode() + payload)
+        self.process.stdin.flush()
+        return self.seq
+
+    def _request(self, command, **arguments):
+        return self._send({"type": "request", "command": command, "arguments": arguments})
+
+    def _receive(self, timeout=0.1):
+        try:
+            message = self.inbox.get(timeout=timeout)
+        except queue.Empty:
+            return
+        if message is None or isinstance(message, Exception):
+            raise StudioError("डिबग अडैप्टर का संपर्क टूट गया।")
+        if message["type"] == "response":
+            self.responses[message["request_seq"]] = message
+        elif message["type"] == "event":
+            if os.name == "nt" and message["event"] == "process" and self.inferior_handle is None:
+                pid = message.get("body", {}).get("systemProcessId")
+                if isinstance(pid, int) and pid > 0:
+                    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+                    kernel.OpenProcess.restype = ctypes.c_void_p
+                    handle = kernel.OpenProcess(0x00100001, False, pid)  # synchronize and terminate
+                    if handle:
+                        self.inferior_handle = ctypes.c_void_p(handle)
+            self.events.append(message)
+        elif message["type"] == "request":
+            self._send({"type": "response", "request_seq": message["seq"], "command": message["command"],
+                        "success": False, "message": "This client does not support reverse requests."})
+
+    def _wait(self, predicate, timeout=20, *, cancelling=True):
+        deadline = time.monotonic() + timeout
+        while not predicate():
+            if cancelling and self.cancel.is_set():
+                raise InterruptedError
+            if time.monotonic() >= deadline:
+                raise StudioError("डिबग अडैप्टर से समय पर उत्तर नहीं मिला।")
+            self._receive()
+
+    def _response(self, seq, **options):
+        self._wait(lambda: seq in self.responses, **options)
+        response = self.responses.pop(seq)
+        if not response.get("success"):
+            detail = response.get("message") or response.get("body", {}).get("message")
+            raise StudioError(detail or f"डिबग आदेश असफल — {response['command']}")
+        return response.get("body", {})
+
+    def _call(self, command, **arguments):
+        return self._response(self._request(command, **arguments))
+
+    def _set_breakpoints(self, name, lines):
+        result = self._call("setBreakpoints", source={"path": str(self.sources / name)},
+                            breakpoints=[{"line": line} for line in lines])
+        for line, breakpoint in zip(lines, result.get("breakpoints", ())):
+            if not breakpoint.get("verified"):
+                self.emit(DebugEvent("output", f"विराम बिंदु अपुष्ट — {name}:{line} {breakpoint.get('message', '')}\n"))
+            elif breakpoint.get("line", line) != line:
+                self.emit(DebugEvent("output", f"विराम बिंदु — {name}:{line} → {breakpoint['line']}\n"))
+
+    def _launch(self):
+        self.capabilities = self._call("initialize", adapterID="lldb-dap", clientID="bhash-yantra",
+                                       linesStartAt1=True, columnsStartAt1=True, pathFormat="path")
+        launch = self._request("launch", program=str(self.executable), cwd=str(self.executable.parent),
+                               args=self.arguments, env=["BHASH_ENV=dev"], disableASLR=False,
+                               enableAutoVariableSummaries=False, enableSyntheticChildDebugging=False,
+                               initCommands=["settings set target.enable-synthetic-value false",
+                                             "settings set target.load-script-from-symbol-file false",
+                                             "settings set target.process.thread.step-avoid-regexp ^bh_"])
+        self._wait(lambda: any(event["event"] == "initialized" for event in self.events)
+                   or launch in self.responses and not self.responses[launch].get("success"))
+        if launch in self.responses:
+            self._response(launch)
+            launch = None
+        for name, lines in self.breakpoints.items():
+            self._set_breakpoints(name, lines)
+        self._call("configurationDone")
+        if launch is not None:
+            self._response(launch)
+        self.emit(DebugEvent("running"))
+
+    def run(self):
+        log = self.executable.parent.parent / "debug-adapter.log"
+        self.emit(DebugEvent("output", f"डिबग अडैप्टर लॉग — {log}\n"))
+        with log.open("wb") as stderr:
+            self.process = subprocess.Popen([self.adapter], cwd=self.executable.parent, stdin=subprocess.PIPE,
+                                            stdout=subprocess.PIPE, stderr=stderr,
+                                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+            reader = threading.Thread(target=self._read, daemon=True)
+            reader.start()
+            try:
+                self._launch()
+                while not self.cancel.is_set() and not self.terminated:
+                    while self.events:
+                        self._event(self.events.popleft())
+                    try:
+                        command = self.commands.get_nowait()
+                    except queue.Empty:
+                        self._receive()
+                    else:
+                        try:
+                            self._command(*command)
+                        except StudioError as error:
+                            self.emit(DebugEvent("output", f"{error}\n"))
+                            self.emit(DebugEvent("idle"))
+            except InterruptedError:
+                pass
+            finally:
+                self._close()
+                reader.join(timeout=2)
+
+    def _close(self):
+        if self.process.poll() is None:
+            try:
+                self._response(self._request("disconnect", terminateDebuggee=True), timeout=3, cancelling=False)
+                self.process.wait(timeout=2)
+            except (StudioError, OSError, subprocess.TimeoutExpired):
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
+                                   capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                if self.process.poll() is None:
+                    self.process.kill()
+                self.process.wait()
+        self.process.stdin.close()
+        self.process.stdout.close()
+        if self.inferior_handle is not None:
+            # Retain the original process handle so PID reuse cannot affect cleanup.
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            if kernel.WaitForSingleObject(self.inferior_handle, 500) == 258:
+                kernel.TerminateProcess(self.inferior_handle, 1)
+                kernel.WaitForSingleObject(self.inferior_handle, 3000)
+            kernel.CloseHandle(self.inferior_handle)
+            self.inferior_handle = None
+
+    def _event(self, message):
+        event = message["event"]
+        body = message.get("body", {})
+        if event == "output":
+            output = body.get("output", "")
+            self.emit(DebugEvent("output", output))
+            if not self.ready and body.get("category") == "stdout":
+                self.output_tail = (self.output_tail + output)[-4096:]
+                if re.search(rf"(?m)^READY {self.port}\r?\n", self.output_tail):
+                    self.ready = True
+                    self.emit(DebugEvent("ready", self.port))
+        elif event == "continued":
+            self.thread = None
+            self.emit(DebugEvent("running"))
+        elif event == "stopped":
+            self.thread = body.get("threadId")
+            if self.thread is None:
+                threads = self._call("threads").get("threads", ())
+                self.thread = threads[0]["id"] if threads else None
+            self.stop_id += 1
+            frames = self._call("stackTrace", threadId=self.thread, levels=40).get("stackFrames", [])
+            for frame in frames:
+                path = frame.get("source", {}).get("path")
+                if path:
+                    candidate = Path(path).resolve()
+                    if candidate.is_relative_to(self.sources):
+                        frame["project_file"] = candidate.relative_to(self.sources).as_posix()
+            self.emit(DebugEvent("stopped", (self.stop_id, body.get("reason"), frames)))
+        elif event in {"exited", "terminated"}:
+            self.terminated = True
+
+    def _command(self, command, stop_id, arguments):
+        if command == "setBreakpoints":
+            self._set_breakpoints(*arguments)
+            return
+        if stop_id != self.stop_id or self.thread is None:
+            return
+        if command in {"continue", "next", "stepIn", "stepOut"}:
+            self._call(command, threadId=self.thread)
+            self.thread = None
+            self.emit(DebugEvent("running"))
+        elif command == "scopes":
+            frame, = arguments
+            scopes = self._call("scopes", frameId=frame).get("scopes", [])
+            self.emit(DebugEvent("scopes", (stop_id, frame, scopes, self.capabilities.get("supportsSetVariable"))))
+        elif command == "variables":
+            node, reference = arguments
+            variables = self._call("variables", variablesReference=reference).get("variables", [])
+            self.emit(DebugEvent("variables", (stop_id, node, reference, variables[:200])))
+        elif command == "setVariable":
+            node, reference, variable, value = arguments
+            result = self._call("setVariable", variablesReference=reference, name=variable["name"], value=value)
+            # LLDB 18 uses "result" instead of the DAP setVariable "value".
+            self.emit(DebugEvent("edited", (stop_id, node, result.get("value", result.get("result", value)))))

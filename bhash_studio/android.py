@@ -265,6 +265,7 @@ class Toolchain:
     compiler: str = ""
     java: str = ""
     sdk: str = ""
+    debugger: str = ""
 
     @classmethod
     def discover(cls):

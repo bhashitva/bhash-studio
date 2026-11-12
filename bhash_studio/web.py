@@ -1,6 +1,7 @@
 """Build and run Bhash web applications without Android tooling."""
 
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -64,7 +65,7 @@ class WebTarget:
         self.tools = tools
         self.runner = runner
 
-    def build(self, project, snapshot, profile, cancel, report):
+    def build(self, project, snapshot, profile, cancel, report, *, debug=False):
         _, profiles = validate_web(snapshot)
         if profile not in profiles:
             raise StudioError(f"परिवेश नहीं मिला — {profile}")
@@ -84,13 +85,22 @@ class WebTarget:
         atomic_write(job / "bhash.project", "name=yantra-web\nsources=src\n")
         shutil.copyfile(self.tools.compiler, job / "compiler.jar")
         report(f"वेब निर्माण — {profile}\nकंपाइलर लॉग — {log}")
-        self.runner([self.tools.java, *JAVA_ENCODING, "-jar", "compiler.jar", "compile",
-                     "bhash.project", "--target", "jvm", "-o", f"{profile}/app.jar"],
-                    job, self.tools.environment(), log, cancel)
-        if not (bundle / "app.jar").is_file():
-            raise StudioError(f"कंपाइलर ने app.jar नहीं बनाई। लॉग देखें — {log}")
+        executable = ("server.exe" if os.name == "nt" else "server") if debug else "app.jar"
+        target = ["--target", "native", "--debug"] if debug else ["--target", "jvm"]
+        try:
+            self.runner([self.tools.java, *JAVA_ENCODING, "-jar", "compiler.jar", "compile",
+                         "bhash.project", *target, "-o", f"{profile}/{executable}"],
+                        job, self.tools.environment(), log, cancel)
+        except StudioError as error:
+            if debug and not cancel.is_set():
+                raise StudioError(f"मूल-मशीन डिबग निर्माण असफल हुआ। कंपाइलर लॉग — {log}") from error
+            raise
+        if not (bundle / executable).is_file():
+            raise StudioError(f"कंपाइलर ने {executable} नहीं बनाया। लॉग देखें — {log}")
         atomic_write(bundle / WEB_PAGE, snapshot[WEB_PAGE])
         copy_assets(project.file(WEB_ASSETS), bundle / WEB_ASSETS)
+        if debug:
+            return bundle / executable
         port = profiles[profile]["port"]
         command = ["java", *JAVA_ENCODING, "-jar", "app.jar",
                    *server_arguments("0.0.0.0", port, "/data/tasks.db")]
@@ -106,10 +116,7 @@ class WebTarget:
         bundle = self.build(project, snapshot, "dev", cancel, report)
         _, profiles = validate_web(snapshot)
         port = profiles["dev"]["port"]
-        data = Path(SCRATCH_DIRECTORY) / "web-data" / "dev" / "tasks.db"
-        project.file(data).parent.mkdir(parents=True, exist_ok=True)
-        # The relative database path keeps the Java command ASCII on Windows.
-        database = Path("..", "..", "..") / data
+        arguments = self.local_arguments(project, port)
         log = bundle.parent / "server.log"
         report(f"स्थानीय वेब सर्वर शुरू हो रहा है। सर्वर लॉग — {log}")
         env = self.tools.environment()
@@ -127,5 +134,12 @@ class WebTarget:
                 report(f"स्थानीय वेब सर्वर तैयार है — http://127.0.0.1:{port}/")
 
         self.runner([self.tools.java, *JAVA_ENCODING, "-jar", "app.jar",
-                     *server_arguments("127.0.0.1", port, database.as_posix())],
+                     *arguments],
                     bundle, env, log, cancel, timeout=float("inf"), on_wait=check_ready)
+
+    @staticmethod
+    def local_arguments(project, port, environment="dev"):
+        data = Path(SCRATCH_DIRECTORY) / "web-data" / environment / "tasks.db"
+        project.file(data).parent.mkdir(parents=True, exist_ok=True)
+        database = Path("..", "..", "..") / data
+        return server_arguments("127.0.0.1", port, database.as_posix())
