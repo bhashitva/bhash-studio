@@ -630,11 +630,23 @@ class DesktopTests(unittest.TestCase):
 
                 editor.insert("insert", "\n    ")
                 constructs = root.nametowidget(app.helpers[1].cget("menu"))
+                from bhash_studio.bhash_syntax import KEYWORDS
+                keywords = root.nametowidget(app.helpers[0].cget("menu"))
+                self.assertEqual(
+                    {keywords.entrycget(i, "label") for i in range(keywords.index("end") + 1)},
+                    set(KEYWORDS),
+                )
+                switch = next(i for i in range(constructs.index("end") + 1)
+                              if constructs.entrycget(i, "label") == "चयन")
                 index = next(i for i in range(constructs.index("end") + 1)
                              if constructs.entrycget(i, "label") == "यदि")
                 constructs.invoke(index)
                 self.assertIn("    यदि (सत्य) {\n        \n    }", editor.get("1.0", "end-1c"))
                 self.assertEqual(editor.get("insert linestart", "insert"), "        ")
+                constructs.invoke(switch)
+                self.assertIn("चयन (मूल्य)", editor.get("1.0", "end-1c"))
+                self.assertIn("विकल्प १:", editor.get("1.0", "end-1c"))
+                self.assertIn("शेष:", editor.get("1.0", "end-1c"))
             finally:
                 root.destroy()
 

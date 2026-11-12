@@ -13,7 +13,7 @@ from tkinter import messagebox, ttk
 import webbrowser
 
 from .android import AndroidTarget, Toolchain
-from .bhash_syntax import COMMON_KEYWORDS, CONSTRUCTS, check_syntax
+from .bhash_syntax import CONSTRUCTS, KEYWORDS, check_syntax
 from .clipboard import COMMANDS, ReadOnlyText, clipboard_action, enable_clipboard
 from .config import loads
 from .editor import BhashEditor
@@ -171,7 +171,7 @@ class Studio:
         self.notebook.bind("<ButtonPress-1>", self.press_tab_close)
         self.notebook.bind("<ButtonRelease-1>", self.release_tab_close)
         self.helpers = [
-            self.insertion_menu(helpers, "शब्द डालें", ((word, (word, "")) for word in COMMON_KEYWORDS)),
+            self.insertion_menu(helpers, "शब्द डालें", ((word, (word, "")) for word in KEYWORDS)),
             self.insertion_menu(helpers, "रचना डालें", CONSTRUCTS.items()),
         ]
         self.preview = tk.Frame(right, background="#ffffff", padx=20, pady=20)
@@ -326,8 +326,9 @@ class Studio:
     def insertion_menu(self, parent, label, entries):
         button = ttk.Menubutton(parent, text=label, state="disabled")
         menu = tk.Menu(button, tearoff=False)
-        for name, parts in entries:
-            menu.add_command(label=name, command=lambda parts=parts: self.editor.insert_helper(*parts))
+        for index, (name, parts) in enumerate(entries):
+            menu.add_command(label=name, columnbreak=index > 0 and index % 18 == 0,
+                             command=lambda parts=parts: self.editor.insert_helper(*parts))
         button.configure(menu=menu)
         button.pack(side="left", padx=(0, 6))
         return button
