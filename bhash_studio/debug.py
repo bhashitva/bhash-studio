@@ -172,6 +172,10 @@ class WebDebugger:
         response = self.responses.pop(seq)
         if not response.get("success"):
             detail = response.get("message") or response.get("body", {}).get("message")
+            if response["command"] == "attach":
+                output = "".join(event.get("body", {}).get("output", "") for event in self.events
+                                 if event.get("event") == "output")
+                detail = "\n".join(part for part in (detail, output[-4000:]) if part)
             raise StudioError(detail or f"डिबग आदेश असफल — {response['command']}")
         return response.get("body", {})
 
@@ -202,7 +206,7 @@ class WebDebugger:
                                    args=self.arguments, env=["BHASH_ENV=dev"], disableASLR=False)
         else:
             launch = self._request("attach", **options, timeout=15, attachCommands=[
-                f"!settings append target.exec-search-paths {json.dumps(str(self.executable.parent), ensure_ascii=False)}",
+                f"settings set target.exec-search-paths {json.dumps(str(self.executable.parent), ensure_ascii=False)}",
                 f"!gdb-remote 127.0.0.1:{self.android_port}",
             ])
         self._wait(lambda: any(event["event"] == "initialized" for event in self.events)

@@ -114,7 +114,13 @@ def debug_android(tools, project, snapshot, adapter, device, cancel, report, emi
                                    cancel, emit, android_port=int(forward))
             debugger.commands = commands
             report("एंड्रॉयड डिबगर जुड़ रहा है। डिबग सत्र चलने पर ऐप में अपना कार्य चलाएँ।")
-            debugger.run()
+            try:
+                debugger.run()
+            except StudioError as error:
+                with log.open("rb") as diagnostic:
+                    diagnostic.seek(max(0, log.stat().st_size - 2048))
+                    detail = diagnostic.read().decode("utf-8", errors="replace").strip()
+                raise StudioError(f"{error}\n{detail}") from error
     finally:
         if bridge is not None and bridge.poll() is None:
             bridge.terminate()
