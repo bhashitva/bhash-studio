@@ -92,13 +92,14 @@ def scalar_value(variable, text):
 
 class WebDebugger:
     def __init__(self, executable, sources, adapter, arguments, port, breakpoints, cancel, emit,
-                 *, android_port=None):
+                 *, android_port=None, android_slide=None):
         self.executable = executable
         self.sources = sources
         self.adapter = adapter
         self.arguments = arguments
         self.port = port
         self.android_port = android_port
+        self.android_slide = android_slide
         self.breakpoints = breakpoints
         self.cancel = cancel
         self.emit = emit
@@ -208,6 +209,9 @@ class WebDebugger:
             launch = self._request("attach", **options, timeout=15, attachCommands=[
                 f"settings set target.exec-search-paths {json.dumps(str(self.executable.parent), ensure_ascii=False)}",
                 f"!gdb-remote 127.0.0.1:{self.android_port}",
+                f"!target modules add {json.dumps(str(self.executable), ensure_ascii=False)}",
+                f"!target modules load --file {json.dumps(str(self.executable), ensure_ascii=False)} "
+                f"--slide {self.android_slide:#x}",
             ])
         self._wait(lambda: any(event["event"] == "initialized" for event in self.events)
                    or launch in self.responses and not self.responses[launch].get("success"))

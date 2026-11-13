@@ -84,6 +84,11 @@ def debug_android(tools, project, snapshot, adapter, device, cancel, report, emi
         pid = run([*serial, "shell", "pidof", package])
         if not pid.isdecimal():
             raise StudioError("एंड्रॉयड ऐप की प्रक्रिया नहीं मिली।")
+        maps = run([*app, "cat", f"/proc/{pid}/maps"])
+        mapping = re.search(r"(?m)^([0-9a-f]+)-[0-9a-f]+\s+\S+\s+0+\s+\S+\s+\d+\s+\S*/libbhash_app\.so$", maps)
+        if not mapping:
+            raise StudioError("ऐप में लोड हुई भाष लाइब्रेरी का पता नहीं मिला।")
+        slide = int(mapping[1], 16)
         run([*serial, "push", str(server), temporary])
         run([*app, "cp", temporary, local])
         run([*app, "chmod", "700", local])
@@ -102,7 +107,7 @@ def debug_android(tools, project, snapshot, adapter, device, cancel, report, emi
                     detail = diagnostic.read().decode("utf-8", errors="replace").strip()
                 raise StudioError(f"एंड्रॉयड डिबग सर्वर शुरू नहीं हुआ — {log}\n{detail}")
             debugger = WebDebugger(symbols, output / "src", adapter, [], None, breakpoints,
-                                   cancel, emit, android_port=int(forward))
+                                   cancel, emit, android_port=int(forward), android_slide=slide)
             debugger.commands = commands
             report("एंड्रॉयड डिबगर जुड़ रहा है। डिबग सत्र चलने पर ऐप में अपना कार्य चलाएँ।")
             try:
