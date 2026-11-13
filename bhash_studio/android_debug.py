@@ -65,15 +65,18 @@ def debug_android(tools, project, snapshot, adapter, device, cancel, report, emi
     package = config["ऐप_पहचान"]
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+", package):
         raise StudioError("एंड्रॉयड ऐप की पहचान अमान्य है।")
-    token = uuid.uuid4().hex
+    token = uuid.uuid4().hex[:12]
     temporary = f"/data/local/tmp/bhash-{token}"
-    local = f"./bhash-{token}"
-    socket = f"/data/data/{package}/bhash-{token}.sock"
+    run([*serial, "install", "-r", "app/build/outputs/apk/debug/app-debug.apk"])
+    home = run([*serial, "shell", "run-as", package, "pwd"])
+    if not re.fullmatch(r"/data/(?:data|user/[0-9]+)/[A-Za-z0-9_.]+", home):
+        raise StudioError("ऐप का डिबग फ़ोल्डर नहीं मिला।")
+    local = f"{home}/bhash-{token}"
+    socket = f"{home}/bhash-{token}.sock"
     app = [*serial, "shell", "run-as", package]
     forward = None
     bridge = None
     try:
-        run([*serial, "install", "-r", "app/build/outputs/apk/debug/app-debug.apk"])
         run([*serial, "shell", "am", "force-stop", package])
         run([*serial, "shell", "am", "start", "-W", "-n",
              f"{package}/org.bhashitva.androidstarter.MainActivity"])
@@ -88,8 +91,8 @@ def debug_android(tools, project, snapshot, adapter, device, cancel, report, emi
             raise StudioError("ADB ने डिबग पोर्ट नहीं दिया।")
         forward = allocated
         with log.open("ab") as stream:
-            bridge = subprocess.Popen([str(adb), *app, local, "gdbserver", f"unix://{socket}",
-                                       "--attach", pid], cwd=output, env=env,
+            bridge = subprocess.Popen([str(adb), *app, local, "gdbserver", "--attach", pid,
+                                       f"unix://{socket}"], cwd=output, env=env,
                                       stdout=stream, stderr=subprocess.STDOUT,
                                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
             deadline = time.monotonic() + 12
@@ -101,7 +104,10 @@ def debug_android(tools, project, snapshot, adapter, device, cancel, report, emi
                     break
                 cancel.wait(.15)
             else:
-                raise StudioError(f"एंड्रॉयड डिबग सर्वर शुरू नहीं हुआ — {log}")
+                with log.open("rb") as diagnostic:
+                    diagnostic.seek(max(0, log.stat().st_size - 2048))
+                    detail = diagnostic.read().decode("utf-8", errors="replace").strip()
+                raise StudioError(f"एंड्रॉयड डिबग सर्वर शुरू नहीं हुआ — {log}\n{detail}")
             debugger = WebDebugger(symbols, output / "src", adapter, [], None, breakpoints,
                                    cancel, emit, android_port=int(forward))
             debugger.commands = commands
