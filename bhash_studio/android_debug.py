@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import time
 import uuid
 
 from .android import AndroidTarget
@@ -74,7 +73,7 @@ def debug_android(tools, project, snapshot, adapter, device, cancel, report, emi
     if not re.fullmatch(r"/data/(?:data|user/[0-9]+)/[A-Za-z0-9_.]+", home):
         raise StudioError("ऐप का डिबग फ़ोल्डर नहीं मिला।")
     local = f"{home}/bhash-{token}"
-    socket = f"{home}/bhash-{token}.sock"
+    socket = f"bhash-{token}"
     app = [*serial, "shell", "run-as", package]
     forward = None
     bridge = None
@@ -88,24 +87,16 @@ def debug_android(tools, project, snapshot, adapter, device, cancel, report, emi
         run([*serial, "push", str(server), temporary])
         run([*app, "cp", temporary, local])
         run([*app, "chmod", "700", local])
-        allocated = run([*serial, "forward", "tcp:0", f"localfilesystem:{socket}"])
+        allocated = run([*serial, "forward", "tcp:0", f"localabstract:{socket}"])
         if not re.fullmatch(r"[0-9]{1,5}", allocated) or not 0 < int(allocated) <= 65535:
             raise StudioError("ADB ने डिबग पोर्ट नहीं दिया।")
         forward = allocated
         with log.open("ab") as stream:
             bridge = subprocess.Popen([str(adb), *app, local, "gdbserver", "--attach", pid,
-                                       f"unix-accept://{socket}"], cwd=output, env=env,
+                                       f"unix-abstract-accept://{socket}"], cwd=output, env=env,
                                       stdout=stream, stderr=subprocess.STDOUT,
                                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-            deadline = time.monotonic() + 12
-            while not cancel.is_set() and bridge.poll() is None and time.monotonic() < deadline:
-                result = subprocess.run([str(adb), *app, "ls", "-ld", socket], cwd=output, env=env,
-                                        capture_output=True, timeout=4,
-                                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-                if result.returncode == 0 and result.stdout.startswith(b"s"):
-                    break
-                cancel.wait(.15)
-            else:
+            if cancel.wait(1) or bridge.poll() is not None:
                 with log.open("rb") as diagnostic:
                     diagnostic.seek(max(0, log.stat().st_size - 2048))
                     detail = diagnostic.read().decode("utf-8", errors="replace").strip()
@@ -125,7 +116,7 @@ def debug_android(tools, project, snapshot, adapter, device, cancel, report, emi
         if bridge is not None and bridge.poll() is None:
             bridge.terminate()
             bridge.wait(timeout=5)
-        cleanup = [[*app, "rm", "-f", local, socket], [*serial, "shell", "rm", "-f", temporary]]
+        cleanup = [[*app, "rm", "-f", local], [*serial, "shell", "rm", "-f", temporary]]
         if forward and forward.isdecimal():
             cleanup.insert(0, [*serial, "forward", "--remove", f"tcp:{forward}"])
         for args in cleanup:
