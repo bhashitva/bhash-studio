@@ -56,9 +56,11 @@ def debug_android(tools, project, snapshot, adapter, device, cancel, report, emi
     architecture = "aarch64" if abi == "arm64-v8a" else abi
     studio = Path(os.environ.get("ProgramFiles", "/opt")) / "Android/Android Studio"
     bundled_server = studio / "plugins/android-ndk/resources/lldb/android" / abi / "lldb-server"
-    server = next(iter(sorted(Path(sdk).glob(
-        f"ndk/*/toolchains/llvm/prebuilt/*/lib/clang/*/lib/linux/{architecture}/lldb-server"
-    ), reverse=True)), bundled_server)
+    gradle = (output / "app/build.gradle.kts").read_text(encoding="utf-8")
+    ndk = re.search(r'ndkVersion\s*=\s*"([0-9.]+)"', gradle)
+    server = next(iter(Path(sdk).glob(
+        f"ndk/{ndk[1] if ndk else '*'}/toolchains/llvm/prebuilt/*/lib/clang/*/lib/linux/{architecture}/lldb-server"
+    )), bundled_server)
     if not server.is_file():
         raise StudioError("एंड्रॉयड NDK में उपकरण के लिए lldb-server नहीं मिला।")
     config, _ = validate_snapshot(snapshot)
@@ -92,15 +94,15 @@ def debug_android(tools, project, snapshot, adapter, device, cancel, report, emi
         forward = allocated
         with log.open("ab") as stream:
             bridge = subprocess.Popen([str(adb), *app, local, "gdbserver", "--attach", pid,
-                                       f"unix://{socket}"], cwd=output, env=env,
+                                       f"unix-accept://{socket}"], cwd=output, env=env,
                                       stdout=stream, stderr=subprocess.STDOUT,
                                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
             deadline = time.monotonic() + 12
             while not cancel.is_set() and bridge.poll() is None and time.monotonic() < deadline:
-                result = subprocess.run([str(adb), *app, "test", "-S", socket], cwd=output, env=env,
+                result = subprocess.run([str(adb), *app, "ls", "-ld", socket], cwd=output, env=env,
                                         capture_output=True, timeout=4,
                                         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-                if result.returncode == 0:
+                if result.returncode == 0 and result.stdout.startswith(b"s"):
                     break
                 cancel.wait(.15)
             else:
@@ -111,7 +113,7 @@ def debug_android(tools, project, snapshot, adapter, device, cancel, report, emi
             debugger = WebDebugger(symbols, output / "src", adapter, [], None, breakpoints,
                                    cancel, emit, android_port=int(forward))
             debugger.commands = commands
-            report("एंड्रॉयड डिबगर जुड़ रहा है। जुड़ने के बाद ऐप में अपना कार्य चलाएँ।")
+            report("एंड्रॉयड डिबगर जुड़ रहा है। डिबग सत्र चलने पर ऐप में अपना कार्य चलाएँ।")
             debugger.run()
     finally:
         if bridge is not None and bridge.poll() is None:

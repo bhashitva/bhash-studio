@@ -1032,7 +1032,7 @@ class Studio:
             self.debug_location = None
             for filename, editor in self.editors.items():
                 self.mark_debug_lines(filename, editor)
-            self.debug_view.reset("डिबग सर्वर चल रहा है")
+            self.debug_view.reset("डिबग सत्र चल रहा है")
         elif event.kind == "stopped":
             self.debug_view.stopped(*event.value)
         elif event.kind == "scopes":
