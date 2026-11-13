@@ -21,6 +21,15 @@ MANAGED_KINDS = {"पाठ": "TEXT", "वस्तु": "OBJECT", "सर्व
 UNAVAILABLE = "मान उपलब्ध नहीं"
 
 
+def managed_kind(variable):
+    # LLDB versions can add qualifiers or expose the typedef in the raw value.
+    for description in (variable.get("type") or "", variable.get("value") or ""):
+        match = re.match(r"^(?:\()?\s*(?:(?:const|volatile)\s+)*(पाठ|वस्तु|सर्ववस्तु)(?=\s|\)|$)", description)
+        if match:
+            return MANAGED_KINDS[match[1]]
+    return None
+
+
 @dataclass
 class DebugEvent:
     kind: str
@@ -101,6 +110,7 @@ class WebDebugger:
         self.terminated = False
         self.ready = False
         self.output_tail = ""
+        self.inspection_warning = False
         self.inferior_handle = None
 
     def _read(self):
@@ -200,6 +210,7 @@ class WebDebugger:
     def run(self):
         log = self.executable.parent.parent / "debug-adapter.log"
         self.emit(DebugEvent("output", f"डिबग अडैप्टर लॉग — {log}\n"))
+        self.emit(DebugEvent("output", f"LLDB — {self.adapter}\n"))
         with log.open("wb") as stderr:
             self.process = subprocess.Popen([self.adapter], cwd=self.executable.parent, stdin=subprocess.PIPE,
                                             stdout=subprocess.PIPE, stderr=stderr,
@@ -315,22 +326,33 @@ class WebDebugger:
             response = self._call("evaluate", context="repl", expression=f"`script inspect_values(lldb.debugger, '{request}')")
             encoded = re.search(r"BHASH_VALUES:([A-Za-z0-9+/=]+)", response.get("result", ""))
             if encoded:
-                return json.loads(base64.b64decode(encoded[1]))
-        except (StudioError, ValueError):
-            pass
+                payload = json.loads(base64.b64decode(encoded[1]))
+                if isinstance(payload, list):
+                    return payload
+                detail = payload.get("error", "अमान्य निरीक्षण उत्तर")
+            else:
+                detail = response.get("result") or "LLDB ने निरीक्षण उत्तर नहीं दिया।"
+        except (StudioError, ValueError) as error:
+            detail = str(error)
+        if not self.inspection_warning:
+            self.inspection_warning = True
+            self.emit(DebugEvent("output", f"भाष मान नहीं पढ़े जा सके — Python-सक्षम LLDB और भाष कंपाइलर जाँचें।\n{detail[:1000]}\n"))
         return [{"name": UNAVAILABLE, "value": "", "variablesReference": 0}] if expand else []
 
     def _format_variables(self, variables):
         slots, values = [], []
         for index, variable in enumerate(variables):
-            kind = MANAGED_KINDS.get(variable.get("type"))
+            kind = managed_kind(variable)
             if kind is None:
                 continue
             raw = variable.get("value", "")
             variable.update(value=UNAVAILABLE, variablesReference=0)
-            if re.fullmatch(r"0[xX][0-9a-fA-F]{1,16}", raw):
+            pointer = re.fullmatch(r"\s*(?:\([^)]*\)\s*)?(0[xX][0-9a-fA-F]{1,16})\s*", raw)
+            if raw.strip() in {"nullptr", "NULL", "nil"}:
+                variable["value"] = "रिक्त"
+            elif pointer:
                 slots.append(index)
-                values.append((variable["name"], int(raw, 16), kind))
+                values.append((variable["name"], int(pointer[1], 16), kind))
         if values:
             rows = self._inspect_values(values)
             if len(rows) == len(slots):

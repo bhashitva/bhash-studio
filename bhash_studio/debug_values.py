@@ -121,6 +121,16 @@ def inspect_values(debugger, encoded):
     request = json.loads(base64.b64decode(encoded))
     target = debugger.GetSelectedTarget()
     inspection = Inspection(target)
+    try:
+        inspection.schema()
+    except (ValueError, RuntimeError, KeyError, TypeError, OverflowError) as error:
+        rows = {"error": str(error)}
+    else:
+        rows = inspect_rows(inspection, request)
+    print("BHASH_VALUES:" + base64.b64encode(json.dumps(rows, ensure_ascii=False).encode()).decode())
+
+
+def inspect_rows(inspection, request):
     if request["expand"]:
         address, kind = request["values"]
         try:
@@ -130,4 +140,4 @@ def inspect_values(debugger, encoded):
             rows = [{"name": UNAVAILABLE, "value": "", "variablesReference": 0}]
     else:
         rows = [inspection.row(*value) for value in request["values"]]
-    print("BHASH_VALUES:" + base64.b64encode(json.dumps(rows, ensure_ascii=False).encode()).decode())
+    return rows

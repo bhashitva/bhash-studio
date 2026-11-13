@@ -82,6 +82,8 @@ shared data store and a coordinated migration process.
   inspect their fields and entries. Text previews are limited to 1,024
   bytes and expansions to 100 rows. Unsupported or unreadable managed
   values show मान उपलब्ध नहीं. Managed values are read-only.
+  Select a variable to see its wrapped value below the table. If managed
+  inspection fails, the message panel shows the LLDB path and diagnostic.
 - The debug server binds to loopback and uses the dev port with its own
   database under `.studio/web-data/debug`. Stop it through **वेब → वेब काम रोकें**.
   Native source stepping across Bhash protected callbacks can follow

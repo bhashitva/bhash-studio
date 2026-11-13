@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from .debug import scalar_value
+from .clipboard import ReadOnlyText
 
 
 class DebugView(ttk.Frame):
@@ -37,8 +38,10 @@ class DebugView(ttk.Frame):
         self.variables.column("#0", width=120, stretch=True)
         self.variables.column("value", width=130, stretch=True)
         self.variables.bind("<<TreeviewOpen>>", self.expand)
-        self.variables.bind("<<TreeviewSelect>>", lambda _: self.update_buttons())
+        self.variables.bind("<<TreeviewSelect>>", self.show_selected_value)
         self.variables.bind("<Double-1>", self.double_click)
+        self.value_preview = ReadOnlyText(self, height=4, width=1, wrap="word")
+        self.value_preview.pack(fill="x", pady=(4, 0))
         self.edit_button = ttk.Button(self, text="मान बदलें…", command=self.edit_selected)
         self.edit_button.pack(anchor="w")
         self.reset("डिबग सर्वर बन रहा है…")
@@ -49,14 +52,27 @@ class DebugView(ttk.Frame):
         tree = ttk.Treeview(container, height=height, columns=columns, show="tree", selectmode="browse")
         scrollbar = ttk.Scrollbar(container, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        tree.pack(side="left", fill="both", expand=True)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+        tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        if columns:
+            horizontal = ttk.Scrollbar(container, orient="horizontal", command=tree.xview)
+            tree.configure(xscrollcommand=horizontal.set)
+            horizontal.grid(row=1, column=0, sticky="ew")
         return tree
 
     def clear_variables(self):
         self.variables.delete(*self.variables.get_children())
         self.nodes.clear()
         self.can_edit = False
+        self.value_preview.set_text("")
+
+    def show_selected_value(self, _event=None):
+        selection = self.variables.selection()
+        _, variable = self.nodes.get(selection[0], (0, {})) if selection else (0, {})
+        self.value_preview.set_text(variable.get("value", ""))
+        self.update_buttons()
 
     def reset(self, label):
         self.status.set(label)
@@ -183,3 +199,4 @@ class DebugView(ttk.Frame):
             _, variable = self.nodes[node]
             variable["value"] = value
             self.variables.item(node, values=(value,))
+            self.show_selected_value()

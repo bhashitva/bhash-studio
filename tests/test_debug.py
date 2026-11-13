@@ -12,11 +12,16 @@ from unittest.mock import patch
 from urllib.request import urlopen
 
 from bhash_studio.android import Toolchain
-from bhash_studio.debug import DebugEvent, WebDebugger, read_message, scalar_value
+from bhash_studio.debug import DebugEvent, WebDebugger, managed_kind, read_message, scalar_value
 from bhash_studio.project import SOURCE, Project
 
 
 class DebugProtocolTests(unittest.TestCase):
+    def test_managed_types_accept_adapter_display_variants(self):
+        self.assertEqual(managed_kind({"type": "const पाठ", "value": "0x123"}), "TEXT")
+        self.assertEqual(managed_kind({"value": "(वस्तु) 0x123"}), "OBJECT")
+        self.assertIsNone(managed_kind({"value": "0x123", "type": "long long"}))
+
     def test_framing_preserves_devanagari(self):
         message = {"name": "संख्या", "value": "१२"}
         payload = json.dumps(message, ensure_ascii=False).encode()
