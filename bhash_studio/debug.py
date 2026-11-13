@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from collections import deque
+import base64
 import ctypes
 import json
 import math
@@ -15,6 +16,18 @@ import threading
 import time
 
 from .errors import StudioError
+
+MANAGED_KINDS = {"पाठ": "TEXT", "वस्तु": "OBJECT", "सर्ववस्तु": "ANY"}
+UNAVAILABLE = "मान उपलब्ध नहीं"
+
+
+def managed_kind(variable):
+    # LLDB versions can add qualifiers or expose the typedef in the raw value.
+    for description in (variable.get("type") or "", variable.get("value") or ""):
+        match = re.match(r"^(?:\()?\s*(?:(?:const|volatile)\s+)*(पाठ|वस्तु|सर्ववस्तु)(?=\s|\)|$)", description)
+        if match:
+            return MANAGED_KINDS[match[1]]
+    return None
 
 
 @dataclass
@@ -97,6 +110,7 @@ class WebDebugger:
         self.terminated = False
         self.ready = False
         self.output_tail = ""
+        self.inspection_warning = False
         self.inferior_handle = None
 
     def _read(self):
@@ -173,12 +187,14 @@ class WebDebugger:
     def _launch(self):
         self.capabilities = self._call("initialize", adapterID="lldb-dap", clientID="bhash-yantra",
                                        linesStartAt1=True, columnsStartAt1=True, pathFormat="path")
+        inspector = ascii(str(Path(__file__).with_name("debug_values.py").resolve()))
         launch = self._request("launch", program=str(self.executable), cwd=str(self.executable.parent),
                                args=self.arguments, env=["BHASH_ENV=dev"], disableASLR=False,
                                enableAutoVariableSummaries=False, enableSyntheticChildDebugging=False,
                                initCommands=["settings set target.enable-synthetic-value false",
                                              "settings set target.load-script-from-symbol-file false",
-                                             "settings set target.process.thread.step-avoid-regexp ^bh_"])
+                                             "settings set target.process.thread.step-avoid-regexp ^bh_",
+                                             f"script exec(compile(open({inspector}, 'rb').read(), {inspector}, 'exec'), globals())"])
         self._wait(lambda: any(event["event"] == "initialized" for event in self.events)
                    or launch in self.responses and not self.responses[launch].get("success"))
         if launch in self.responses:
@@ -194,6 +210,7 @@ class WebDebugger:
     def run(self):
         log = self.executable.parent.parent / "debug-adapter.log"
         self.emit(DebugEvent("output", f"डिबग अडैप्टर लॉग — {log}\n"))
+        self.emit(DebugEvent("output", f"LLDB — {self.adapter}\n"))
         with log.open("wb") as stderr:
             self.process = subprocess.Popen([self.adapter], cwd=self.executable.parent, stdin=subprocess.PIPE,
                                             stdout=subprocess.PIPE, stderr=stderr,
@@ -291,10 +308,53 @@ class WebDebugger:
             self.emit(DebugEvent("scopes", (stop_id, frame, scopes, self.capabilities.get("supportsSetVariable"))))
         elif command == "variables":
             node, reference = arguments
-            variables = self._call("variables", variablesReference=reference).get("variables", [])
-            self.emit(DebugEvent("variables", (stop_id, node, reference, variables[:200])))
+            if isinstance(reference, list):
+                variables = self._inspect_values(reference, expand=True)
+            else:
+                variables = self._call("variables", variablesReference=reference).get("variables", [])[:200]
+                self._format_variables(variables)
+            self.emit(DebugEvent("variables", (stop_id, node, reference, variables)))
         elif command == "setVariable":
             node, reference, variable, value = arguments
             result = self._call("setVariable", variablesReference=reference, name=variable["name"], value=value)
             # LLDB 18 uses "result" instead of the DAP setVariable "value".
             self.emit(DebugEvent("edited", (stop_id, node, result.get("value", result.get("result", value)))))
+
+    def _inspect_values(self, values, *, expand=False):
+        request = base64.b64encode(json.dumps({"expand": expand, "values": values}).encode()).decode()
+        try:
+            response = self._call("evaluate", context="repl", expression=f"`script inspect_values(lldb.debugger, '{request}')")
+            encoded = re.search(r"BHASH_VALUES:([A-Za-z0-9+/=]+)", response.get("result", ""))
+            if encoded:
+                payload = json.loads(base64.b64decode(encoded[1]))
+                if isinstance(payload, list):
+                    return payload
+                detail = payload.get("error", "अमान्य निरीक्षण उत्तर")
+            else:
+                detail = response.get("result") or "LLDB ने निरीक्षण उत्तर नहीं दिया।"
+        except (StudioError, ValueError) as error:
+            detail = str(error)
+        if not self.inspection_warning:
+            self.inspection_warning = True
+            self.emit(DebugEvent("output", f"भाष मान नहीं पढ़े जा सके — Python-सक्षम LLDB और भाष कंपाइलर जाँचें।\n{detail[:1000]}\n"))
+        return [{"name": UNAVAILABLE, "value": "", "variablesReference": 0}] if expand else []
+
+    def _format_variables(self, variables):
+        slots, values = [], []
+        for index, variable in enumerate(variables):
+            kind = managed_kind(variable)
+            if kind is None:
+                continue
+            raw = variable.get("value", "")
+            variable.update(value=UNAVAILABLE, variablesReference=0)
+            pointer = re.fullmatch(r"\s*(?:\([^)]*\)\s*)?(0[xX][0-9a-fA-F]{1,16})\s*", raw)
+            if raw.strip() in {"nullptr", "NULL", "nil"}:
+                variable["value"] = "रिक्त"
+            elif pointer:
+                slots.append(index)
+                values.append((variable["name"], int(pointer[1], 16), kind))
+        if values:
+            rows = self._inspect_values(values)
+            if len(rows) == len(slots):
+                for index, row in zip(slots, rows):
+                    variables[index].update(row)
