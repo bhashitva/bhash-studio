@@ -166,6 +166,22 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 600
           script: python -m unittest discover -s tests -p test_device.py -v
+      - name: Debug Bhash source on the Android emulator
+        if: matrix.api == 29
+        env:
+          BHASH_STUDIO_ANDROID_DEBUG_TESTS: '1'
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          emulator-boot-timeout: 600
+          script: |
+            curl --fail --location --retry 3 https://github.com/bhashitva/bhash/releases/download/bhash-0.25.1/bhash-compiler-0.25.1.jar -o "$RUNNER_TEMP/bhash-toolchain/android-debug.jar"
+            echo "ec1947fe2f8a8fb817b9da3436396c25467e874dc5390728c3561a2fb7e8d02a  $RUNNER_TEMP/bhash-toolchain/android-debug.jar" | sha256sum --check
+            BHASH_COMPILER_JAR="$RUNNER_TEMP/bhash-toolchain/android-debug.jar" PATH="/usr/lib/llvm-18/bin:$PATH" python -m unittest discover -s tests -p test_android_debug.py -v
       - name: Upload APKs and diagnostic results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

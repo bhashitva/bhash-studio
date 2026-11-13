@@ -13,6 +13,7 @@ from tkinter import messagebox, ttk
 import webbrowser
 
 from .android import AndroidTarget, Toolchain
+from .android_debug import debug_android
 from .bhash_syntax import CONSTRUCTS, KEYWORDS, check_syntax
 from .clipboard import COMMANDS, ReadOnlyText, clipboard_action, enable_clipboard
 from .config import loads
@@ -398,18 +399,19 @@ class Studio:
 
         project_menu = dropdown("परियोजना")
         add(project_menu, "check", "परियोजना जाँचें", self.validate)
+        add(project_menu, "breakpoint", "विराम बिंदु लगाएँ या हटाएँ", self.toggle_breakpoint, "<F9>", "F9")
 
         android_menu = dropdown("एंड्रॉयड")
         add(android_menu, "export", "एंड्रॉयड निर्यात", lambda: self.start_job("export"))
         add(android_menu, "build", "ऐप बनाएँ", lambda: self.start_job("build"))
         add(android_menu, "run", "उपकरण पर चलाएँ", lambda: self.start_job("run"))
+        add(android_menu, "android_debug", "उपकरण पर स्रोत डिबगिंग शुरू करें", self.start_debug)
         android_menu.add_separator()
         add(android_menu, "stop", "काम रोकें", self.cancel.set)
 
         web_menu = dropdown("वेब")
         add(web_menu, "web_run", "स्थानीय सर्वर चलाएँ", lambda: self.start_web(True))
         add(web_menu, "web_debug", "स्रोत डिबगिंग शुरू करें", self.start_debug)
-        add(web_menu, "web_breakpoint", "विराम बिंदु लगाएँ या हटाएँ", self.toggle_breakpoint, "<F9>", "F9")
         add(web_menu, "web_browser", "ब्राउज़र में खोलें", self.open_web_preview)
         add(web_menu, "web_export", "तैनाती बंडल बनाएँ…", lambda: self.start_web(False))
         add(web_menu, "web_stop", "वेब काम रोकें", self.cancel.set)
@@ -432,8 +434,8 @@ class Studio:
                 enabled = web and busy and self.web_port is not None
             elif key in {"web_run", "web_export", "web_debug"}:
                 enabled = web and ready
-            elif key == "web_breakpoint":
-                enabled = web and bool(self.active and self.active.endswith(".bhash")) and (
+            elif key == "breakpoint":
+                enabled = bool(self.active and self.active.endswith(".bhash")) and (
                     self.debug_commands is None or self.active in self.debug_sources)
             elif key in {"files", "new_file", "import_file"}:
                 enabled = self.project is not None
@@ -443,7 +445,7 @@ class Studio:
                 enabled = self.active is not None and not busy
             elif key == "check":
                 enabled = ready
-            elif key in {"export", "build", "run"}:
+            elif key in {"export", "build", "run", "android_debug"}:
                 enabled = not web and ready
             else:
                 enabled = not busy or key == "exit"
@@ -940,7 +942,7 @@ class Studio:
 
     def toggle_breakpoint(self):
         filename = self.active
-        if self.required_files() != WEB_FILES or not filename or not filename.endswith(".bhash"):
+        if not filename or not filename.endswith(".bhash"):
             return
         editor = self.editors[filename]
         line = int(editor.index("insert").split(".")[0])
@@ -984,8 +986,8 @@ class Studio:
             raise StudioError("पहला कार्य पूरा होने दें या उसे रोकें।")
         adapter = adapter_path(self.tools.debugger)
         snapshot = self.validate()
-        _, profiles = validate_web(snapshot)
-        port = profiles["dev"]["port"]
+        web = self.required_files() == WEB_FILES
+        port = validate_web(snapshot)[1]["dev"]["port"] if web else None
         project = self.project
         tools = replace(self.tools, compiler=self.compiler_override) if self.compiler_override else self.tools
         self.debug_commands = queue.Queue()
@@ -997,12 +999,16 @@ class Studio:
             if name in self.debug_sources:
                 editor.configure(state="disabled")
         self.preview.pack_forget()
-        self.debug_view.reset("डिबग सर्वर बन रहा है…")
+        self.debug_view.reset("डिबग निर्माण चल रहा है…")
         self.debug_view.pack(fill="both", expand=True, padx=12, pady=6)
         self.tab_changed()
 
         def work():
             try:
+                if not web:
+                    debug_android(tools, project, snapshot, adapter, self.device, self.cancel,
+                                  self.messages.put, self.messages.put, breakpoints, commands)
+                    return
                 target = WebTarget(tools)
                 executable = target.build(project, snapshot, "dev", self.cancel, self.messages.put, debug=True)
                 debugger = WebDebugger(executable, executable.parent.parent / "src", adapter,

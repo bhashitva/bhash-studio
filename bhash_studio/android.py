@@ -412,7 +412,7 @@ class AndroidTarget:
                          f"{app_id}/org.bhashitva.androidstarter.MainActivity"], output, env, log, cancel)
 
     def execute(self, project, snapshot, operation, cancel, report, device=""):
-        if operation not in {"export", "build", "run"}:
+        if operation not in {"export", "build", "run", "debug"}:
             raise StudioError("निर्माण कार्य सही नहीं है।")
         config, screen = validate_snapshot(snapshot)
         require_android(config)
@@ -446,7 +446,21 @@ class AndroidTarget:
             exports = "bhash_studio_screen = भाष_दृश्य(पाठ) -> पाठ\n"
         atomic_write(output / "bhash.exports", exports)
         activity = output / "app/src/main/java/org/bhashitva/androidstarter/MainActivity.kt"
-        atomic_write(activity, generate_activity(screen))
+        activity_source = generate_activity(screen)
+        if operation == "debug":
+            script = output / "gradle/bhash-native.gradle"
+            native = script.read_text(encoding="utf-8")
+            if "--debug-symbols" not in native:
+                raise StudioError("एंड्रॉयड स्रोत डिबगिंग के लिए भाष कंपाइलर 0.25.1 या नया चुनें।")
+            native = native.replace("if (embedSymbols) command.addAll", "command.addAll", 1)
+            atomic_write(script, native)
+            activity_source = activity_source.replace("super.onCreate(savedInstanceState)",
+                'super.onCreate(savedInstanceState)\n        System.loadLibrary("bhash_app")', 1)
+            # Give the remote debugger a normal ELF module path instead of an APK offset.
+            gradle = output / "app/build.gradle.kts"
+            atomic_write(gradle, gradle.read_text(encoding="utf-8") +
+                         "\nandroid.packaging.jniLibs.useLegacyPackaging = true\n")
+        atomic_write(activity, activity_source)
         test = output / "app/src/androidTest/java/org/bhashitva/androidstarter/StarterTest.kt"
         test.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(test, generate_device_tests(screen))
@@ -469,8 +483,8 @@ class AndroidTarget:
         for name, text in snapshot.items():
             self.stage_source(project, job, name, text)
         if operation != "export":
-            report("ऐप बनाया जा रहा है…" if operation == "build" else "ऐप बनाकर उपकरण पर चलाया जा रहा है…")
-            args = ["android", operation, str(output)]
+            report("ऐप बनाकर उपकरण पर चलाया जा रहा है…" if operation == "run" else "ऐप बनाया जा रहा है…")
+            args = ["android", "build" if operation == "debug" else operation, str(output)]
             if operation == "run" and device:
                 if not all(c.isalnum() or c in "_.:%[]-" for c in device) or device.startswith("-"):
                     raise StudioError("उपकरण की पहचान सही नहीं है।")
