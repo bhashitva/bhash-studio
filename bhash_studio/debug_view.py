@@ -156,7 +156,7 @@ class DebugView(ttk.Frame):
             _, variable = self.nodes[node]
             children = self.variables.get_children(node)
             if len(children) == 1 and children[0] not in self.nodes:
-                self.send("variables", self.stop_id, node, variable["variablesReference"])
+                self.send("variables", self.stop_id, node, variable.get("bhashChildren") or variable["variablesReference"])
 
     def show_variables(self, stop_id, node, reference, variables):
         if stop_id != self.stop_id or node not in self.nodes:
@@ -166,7 +166,7 @@ class DebugView(ttk.Frame):
             child = self.variables.insert(node, "end", text=variable["name"],
                                           values=(variable.get("value", ""),))
             self.nodes[child] = (reference, variable)
-            if variable.get("variablesReference"):
+            if variable.get("variablesReference") or variable.get("bhashChildren"):
                 self.variables.insert(child, "end", text="…")
 
     def double_click(self, event):

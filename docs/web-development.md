@@ -76,10 +76,12 @@ shared data store and a coordinated migration process.
   the adapter may move the breakpoint or report it as unverified.
 - Select a supported scalar local or parameter and use **मान बदलें…**.
   Yantra accepts integer, byte, decimal, or boolean literals where LLDB
-  exposes those types and supports writes. Compound values can be inspected
-  to the extent LLDB exposes them. Managed text and objects may appear as
-  native references. Yantra does not write managed references or evaluate
-  arbitrary debugger expressions.
+  exposes those types and supports writes. With Python-enabled LLDB and
+  Bhash debug schema v1 (runtime ABI 17), Yantra shows UTF-8 text, boxed
+  scalar values and रिक्त directly. Expand objects and collections to
+  inspect their fields and entries. Text previews are limited to 1,024
+  bytes and expansions to 100 rows. Unsupported or unreadable managed
+  values show मान उपलब्ध नहीं. Managed values are read-only.
 - The debug server binds to loopback and uses the dev port with its own
   database under `.studio/web-data/debug`. Stop it through **वेब → वेब काम रोकें**.
   Native source stepping across Bhash protected callbacks can follow

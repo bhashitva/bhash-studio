@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from collections import deque
+import base64
 import ctypes
 import json
 import math
@@ -15,6 +16,9 @@ import threading
 import time
 
 from .errors import StudioError
+
+MANAGED_KINDS = {"पाठ": "TEXT", "वस्तु": "OBJECT", "सर्ववस्तु": "ANY"}
+UNAVAILABLE = "मान उपलब्ध नहीं"
 
 
 @dataclass
@@ -173,12 +177,14 @@ class WebDebugger:
     def _launch(self):
         self.capabilities = self._call("initialize", adapterID="lldb-dap", clientID="bhash-yantra",
                                        linesStartAt1=True, columnsStartAt1=True, pathFormat="path")
+        inspector = ascii(str(Path(__file__).with_name("debug_values.py").resolve()))
         launch = self._request("launch", program=str(self.executable), cwd=str(self.executable.parent),
                                args=self.arguments, env=["BHASH_ENV=dev"], disableASLR=False,
                                enableAutoVariableSummaries=False, enableSyntheticChildDebugging=False,
                                initCommands=["settings set target.enable-synthetic-value false",
                                              "settings set target.load-script-from-symbol-file false",
-                                             "settings set target.process.thread.step-avoid-regexp ^bh_"])
+                                             "settings set target.process.thread.step-avoid-regexp ^bh_",
+                                             f"script exec(compile(open({inspector}, 'rb').read(), {inspector}, 'exec'), globals())"])
         self._wait(lambda: any(event["event"] == "initialized" for event in self.events)
                    or launch in self.responses and not self.responses[launch].get("success"))
         if launch in self.responses:
@@ -291,10 +297,42 @@ class WebDebugger:
             self.emit(DebugEvent("scopes", (stop_id, frame, scopes, self.capabilities.get("supportsSetVariable"))))
         elif command == "variables":
             node, reference = arguments
-            variables = self._call("variables", variablesReference=reference).get("variables", [])
-            self.emit(DebugEvent("variables", (stop_id, node, reference, variables[:200])))
+            if isinstance(reference, list):
+                variables = self._inspect_values(reference, expand=True)
+            else:
+                variables = self._call("variables", variablesReference=reference).get("variables", [])[:200]
+                self._format_variables(variables)
+            self.emit(DebugEvent("variables", (stop_id, node, reference, variables)))
         elif command == "setVariable":
             node, reference, variable, value = arguments
             result = self._call("setVariable", variablesReference=reference, name=variable["name"], value=value)
             # LLDB 18 uses "result" instead of the DAP setVariable "value".
             self.emit(DebugEvent("edited", (stop_id, node, result.get("value", result.get("result", value)))))
+
+    def _inspect_values(self, values, *, expand=False):
+        request = base64.b64encode(json.dumps({"expand": expand, "values": values}).encode()).decode()
+        try:
+            response = self._call("evaluate", context="repl", expression=f"`script inspect_values(lldb.debugger, '{request}')")
+            encoded = re.search(r"BHASH_VALUES:([A-Za-z0-9+/=]+)", response.get("result", ""))
+            if encoded:
+                return json.loads(base64.b64decode(encoded[1]))
+        except (StudioError, ValueError):
+            pass
+        return [{"name": UNAVAILABLE, "value": "", "variablesReference": 0}] if expand else []
+
+    def _format_variables(self, variables):
+        slots, values = [], []
+        for index, variable in enumerate(variables):
+            kind = MANAGED_KINDS.get(variable.get("type"))
+            if kind is None:
+                continue
+            raw = variable.get("value", "")
+            variable.update(value=UNAVAILABLE, variablesReference=0)
+            if re.fullmatch(r"0[xX][0-9a-fA-F]{1,16}", raw):
+                slots.append(index)
+                values.append((variable["name"], int(raw, 16), kind))
+        if values:
+            rows = self._inspect_values(values)
+            if len(rows) == len(slots):
+                for index, row in zip(slots, rows):
+                    variables[index].update(row)
