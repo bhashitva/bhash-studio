@@ -1,0 +1,47 @@
+name: Windows installer preview
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packaging/windows/**'
+      - 'bhash_studio/**'
+      - '.github/workflows/windows-installer.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      - name: Fetch and verify installer payloads
+        shell: powershell
+        run: |
+          & packaging/windows/fetch.ps1 -Directory installer-inputs
+          python packaging/windows/build.py installer-inputs dist/Bhash-Yantra-Windows-x64.zip
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install and check the packaged application
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path unpacked | Out-Null
+          tar.exe -xf dist/Bhash-Yantra-Windows-x64.zip -C unpacked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $destination = Join-Path $env:RUNNER_TEMP 'yantra-preview'
+          & unpacked/Install.ps1 -InstallRoot $destination -NoShortcut -SkipDebugTools
+          $app = Get-ChildItem $destination -Directory -Filter 'app-*' | Select-Object -First 1
+          $tools = Get-Content (Join-Path $app.FullName 'installed-tools.json') -Raw | ConvertFrom-Json
+          & $tools.python (Join-Path $app.FullName 'Launch.py') --check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Bhash-Yantra-Windows-x64
+          path: dist/Bhash-Yantra-Windows-x64.zip
+          if-no-files-found: error
