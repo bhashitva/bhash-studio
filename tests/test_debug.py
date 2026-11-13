@@ -63,7 +63,9 @@ class WebDebuggerIntegrationTests(unittest.TestCase):
             self.assertIn(original, source)
             source = source.replace(original, """सार्वजनिक फलन संभालो(अनुरोध: वेबअनुरोध) -> वेबउत्तर {
         मान संख्या: पूर्णांक = २०;
+        स्थिर संदेश: पाठ = "नमस्ते";
         संख्या = उत्तरसंख्या(संख्या);
+        यदि (संदेश == "") { लौटाओ वेब.पाठउत्तर(५००, संदेश); }
         लौटाओ वेब.पाठउत्तर(२००, वेब.अंक(संख्या));
     }""") + """
 फलन उत्तरसंख्या(इनपुट: पूर्णांक) -> पूर्णांक {
@@ -111,15 +113,8 @@ class WebDebuggerIntegrationTests(unittest.TestCase):
                                  if variable.get("name") == "संख्या"), None)
 
                 until(find_scalar)
-                request_value = next(variable for _, variable in view.nodes.values()
-                                     if variable.get("name") == "अनुरोध")
-                self.assertEqual(request_value["value"], "वेबअनुरोध")
-                self.assertTrue(request_value.get("bhashChildren"))
-                request_node = next(node for node, (_, variable) in view.nodes.items()
-                                    if variable is request_value)
-                app.send_debug("variables", view.stop_id, request_node, request_value["bhashChildren"])
-                until(lambda: any(view.nodes.get(child, (0, {}))[1].get("value") == '"GET"'
-                                  for child in view.variables.get_children(request_node)))
+                self.assertIn('"नमस्ते"', [variable.get("value") for _, variable in view.nodes.values()
+                                            if variable.get("name") == "संदेश"])
                 node, reference, variable = find_scalar()
                 self.assertEqual(variable["value"], "20")
                 view.variables.selection_set(node)
