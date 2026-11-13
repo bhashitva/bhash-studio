@@ -459,7 +459,8 @@ class AndroidTarget:
             # Give the remote debugger a normal ELF module path instead of an APK offset.
             gradle = output / "app/build.gradle.kts"
             atomic_write(gradle, gradle.read_text(encoding="utf-8") +
-                         "\nandroid.packaging.jniLibs.useLegacyPackaging = true\n")
+                         "\nandroid.packaging.jniLibs.useLegacyPackaging = true\n"
+                         'android.packaging.jniLibs.keepDebugSymbols.add("**/libbhash_app.so")\n')
         atomic_write(activity, activity_source)
         test = output / "app/src/androidTest/java/org/bhashitva/androidstarter/StarterTest.kt"
         test.parent.mkdir(parents=True, exist_ok=True)
