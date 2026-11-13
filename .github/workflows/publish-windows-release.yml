@@ -1,0 +1,62 @@
+name: Publish Bhash Yantra v0.1.0
+
+on:
+  push:
+    branches: [publish-yantra-v0.1.0]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-yantra-v0.1.0
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 72536e90bfae1fa1ad7354c129bf345a4fc120d5
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      - name: Fetch and verify installer payloads
+        shell: powershell
+        run: |
+          & packaging/windows/fetch.ps1 -Directory installer-inputs
+          python packaging/windows/build.py installer-inputs dist/Bhash-Yantra-Windows-x64.zip
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install and check the packaged application
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path unpacked | Out-Null
+          tar.exe -xf dist/Bhash-Yantra-Windows-x64.zip -C unpacked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $destination = Join-Path $env:RUNNER_TEMP 'yantra-preview'
+          & unpacked/Install.ps1 -InstallRoot $destination -NoShortcut -SkipDebugTools
+          $app = Get-ChildItem $destination -Directory -Filter 'app-*' | Select-Object -First 1
+          $tools = Get-Content (Join-Path $app.FullName 'installed-tools.json') -Raw | ConvertFrom-Json
+          & $tools.python (Join-Path $app.FullName 'Launch.py') --check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Publish the tested Windows ZIP
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: 72536e90bfae1fa1ad7354c129bf345a4fc120d5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $notes = @'
+          First public release of Bhash Yantra with a Windows x64 installer.
+
+          - Hindi-first editor for Bhash projects, Android build and run, and web development.
+          - The web debugger supports breakpoints, stepping, and readable values for Bhash text, objects, and collections. Supported scalar locals and arguments can be edited.
+          - Download Bhash-Yantra-Windows-x64.zip under Assets, extract it once, and run Install.cmd. Open Bhash Yantra from the Start menu.
+          - Android SDK packages are installed separately through Google's tools. Native web debugging uses LLVM-MinGW when needed.
+          '@
+          $zip = 'dist/Bhash-Yantra-Windows-x64.zip'
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath "$zip.sha256" -Value "$hash  Bhash-Yantra-Windows-x64.zip" -Encoding ascii
+          gh release create v0.1.0 $zip "$zip.sha256" --repo $env:GITHUB_REPOSITORY --target $env:RELEASE_COMMIT --title 'Bhash Yantra v0.1.0' --notes $notes --latest
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
