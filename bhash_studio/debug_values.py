@@ -141,3 +141,19 @@ def inspect_rows(inspection, request):
     else:
         rows = [inspection.row(*value) for value in request["values"]]
     return rows
+
+
+def load_android_symbols(debugger, path, slide):
+    target = debugger.GetSelectedTarget()
+    module = target.AddModule(path, None, None)
+    if not module.IsValid() or not module.GetNumCompileUnits():
+        raise RuntimeError("Bhash library has no readable debug information")
+    # The loaded stripped copy can otherwise win address-to-frame lookup.
+    for index in reversed(range(target.GetNumModules())):
+        loaded = target.GetModuleAtIndex(index)
+        if loaded != module and loaded.GetFileSpec().GetFilename() == "libbhash_app.so":
+            target.ClearModuleLoadAddress(loaded)
+            target.RemoveModule(loaded)
+    error = target.SetModuleLoadAddress(module, slide)
+    if error.Fail():
+        raise RuntimeError(error.GetCString())

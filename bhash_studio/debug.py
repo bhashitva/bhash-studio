@@ -91,12 +91,15 @@ def scalar_value(variable, text):
 
 
 class WebDebugger:
-    def __init__(self, executable, sources, adapter, arguments, port, breakpoints, cancel, emit):
+    def __init__(self, executable, sources, adapter, arguments, port, breakpoints, cancel, emit,
+                 *, android_port=None, android_slide=None):
         self.executable = executable
         self.sources = sources
         self.adapter = adapter
         self.arguments = arguments
         self.port = port
+        self.android_port = android_port
+        self.android_slide = android_slide
         self.breakpoints = breakpoints
         self.cancel = cancel
         self.emit = emit
@@ -142,7 +145,8 @@ class WebDebugger:
         if message["type"] == "response":
             self.responses[message["request_seq"]] = message
         elif message["type"] == "event":
-            if os.name == "nt" and message["event"] == "process" and self.inferior_handle is None:
+            if (os.name == "nt" and self.android_port is None and message["event"] == "process"
+                    and self.inferior_handle is None):
                 pid = message.get("body", {}).get("systemProcessId")
                 if isinstance(pid, int) and pid > 0:
                     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -169,6 +173,10 @@ class WebDebugger:
         response = self.responses.pop(seq)
         if not response.get("success"):
             detail = response.get("message") or response.get("body", {}).get("message")
+            if response["command"] == "attach":
+                output = "".join(event.get("body", {}).get("output", "") for event in self.events
+                                 if event.get("event") == "output")
+                detail = "\n".join(part for part in (detail, output[-4000:]) if part)
             raise StudioError(detail or f"डिबग आदेश असफल — {response['command']}")
         return response.get("body", {})
 
@@ -188,13 +196,21 @@ class WebDebugger:
         self.capabilities = self._call("initialize", adapterID="lldb-dap", clientID="bhash-yantra",
                                        linesStartAt1=True, columnsStartAt1=True, pathFormat="path")
         inspector = ascii(str(Path(__file__).with_name("debug_values.py").resolve()))
-        launch = self._request("launch", program=str(self.executable), cwd=str(self.executable.parent),
-                               args=self.arguments, env=["BHASH_ENV=dev"], disableASLR=False,
-                               enableAutoVariableSummaries=False, enableSyntheticChildDebugging=False,
-                               initCommands=["settings set target.enable-synthetic-value false",
-                                             "settings set target.load-script-from-symbol-file false",
-                                             "settings set target.process.thread.step-avoid-regexp ^bh_",
-                                             f"script exec(compile(open({inspector}, 'rb').read(), {inspector}, 'exec'), globals())"])
+        options = dict(program=str(self.executable), enableAutoVariableSummaries=False,
+                       enableSyntheticChildDebugging=False,
+                       initCommands=["settings set target.enable-synthetic-value false",
+                                     "settings set target.load-script-from-symbol-file false",
+                                     "settings set target.process.thread.step-avoid-regexp ^bh_",
+                                     f"script exec(compile(open({inspector}, 'rb').read(), {inspector}, 'exec'), globals())"])
+        if self.android_port is None:
+            launch = self._request("launch", **options, cwd=str(self.executable.parent),
+                                   args=self.arguments, env=["BHASH_ENV=dev"], disableASLR=False)
+        else:
+            launch = self._request("attach", **options, timeout=15, attachCommands=[
+                f"settings set target.exec-search-paths {json.dumps(str(self.executable.parent), ensure_ascii=False)}",
+                f"!gdb-remote 127.0.0.1:{self.android_port}",
+                f"!script load_android_symbols(lldb.debugger, {ascii(str(self.executable))}, {self.android_slide})",
+            ])
         self._wait(lambda: any(event["event"] == "initialized" for event in self.events)
                    or launch in self.responses and not self.responses[launch].get("success"))
         if launch in self.responses:
@@ -241,7 +257,8 @@ class WebDebugger:
     def _close(self):
         if self.process.poll() is None:
             try:
-                self._response(self._request("disconnect", terminateDebuggee=True), timeout=3, cancelling=False)
+                self._response(self._request("disconnect", terminateDebuggee=self.android_port is None),
+                               timeout=3, cancelling=False)
                 self.process.wait(timeout=2)
             except (StudioError, OSError, subprocess.TimeoutExpired):
                 if os.name == "nt":
@@ -267,7 +284,7 @@ class WebDebugger:
         if event == "output":
             output = body.get("output", "")
             self.emit(DebugEvent("output", output))
-            if not self.ready and body.get("category") == "stdout":
+            if self.port is not None and not self.ready and body.get("category") == "stdout":
                 self.output_tail = (self.output_tail + output)[-4096:]
                 if re.search(rf"(?m)^READY {self.port}\r?\n", self.output_tail):
                     self.ready = True
