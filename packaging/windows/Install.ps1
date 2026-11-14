@@ -155,10 +155,10 @@ foreach ($archive in $archives) {
     & $python -I -m zipfile -e $archive $app
     if ($LASTEXITCODE) { throw "Could not install $archive." }
 }
-$compiler = Find-Tool @($env:BHASH_COMPILER_JAR, (Join-Path $managed 'bhash-compiler-0.25.0.jar')) {
+$compiler = Find-Tool @($env:BHASH_COMPILER_JAR, (Join-Path $managed 'bhash-compiler-0.25.2.jar')) {
     param($path) (Get-FileHash -LiteralPath $path).Hash -eq $lock.'compiler.jar'
 }
-if (!$compiler) { $compiler = Join-Path $managed 'bhash-compiler-0.25.0.jar' }
+if (!$compiler) { $compiler = Join-Path $managed 'bhash-compiler-0.25.2.jar' }
 if (!(Test-Path -LiteralPath $compiler) -or (Get-FileHash -LiteralPath $compiler).Hash -ne $lock.'compiler.jar') {
     Copy-Item -LiteralPath (Confirm-File 'compiler.jar') -Destination $compiler -Force
 } else { Write-Host "Reusing Bhash compiler: $compiler" }

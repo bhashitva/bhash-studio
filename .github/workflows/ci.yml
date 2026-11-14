@@ -120,9 +120,9 @@ jobs:
         run: |
           mkdir -p "$(dirname "$BHASH_COMPILER_JAR")"
           curl --fail --location --retry 3 \
-            https://github.com/bhashitva/bhash/releases/download/bhash-0.25.0/bhash-compiler-0.25.0.jar \
+            https://github.com/bhashitva/bhash/releases/download/bhash-0.25.2/bhash-compiler-0.25.2.jar \
             --output "$BHASH_COMPILER_JAR"
-          echo "9e353b85365c50367ec008486d8ef83eeeb550a1dd9dbcc9d889f79dab904162  $BHASH_COMPILER_JAR" | sha256sum --check
+          echo "e95e721cc4b30b28f6566374d98fa7f75c7818906b11c8437140f986825bce36  $BHASH_COMPILER_JAR" | sha256sum --check
       - name: Build and exercise a real web application
         if: matrix.api == 29
         env:
@@ -210,15 +210,10 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Check out Bhash compiler fix
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: bhashitva/bhash
-          ref: 995b5216cac015e503ef4c461f4f360b20233e64
-          path: .bhash-compiler-ci
-          persist-credentials: false
-      - name: Build Bhash compiler for emulator verification
-        run: mvn --batch-mode --no-transfer-progress -f .bhash-compiler-ci/pom.xml -DskipTests package
+      - name: Fetch checksum-pinned Bhash compiler
+        run: |
+          curl --fail --location --retry 3 https://github.com/bhashitva/bhash/releases/download/bhash-0.25.2/bhash-compiler-0.25.2.jar --output "$RUNNER_TEMP/compiler.jar"
+          echo "e95e721cc4b30b28f6566374d98fa7f75c7818906b11c8437140f986825bce36  $RUNNER_TEMP/compiler.jar" | sha256sum --check
       - name: Debug Bhash source on the Android emulator
         env:
           BHASH_STUDIO_ANDROID_DEBUG_TESTS: '1'
@@ -231,7 +226,7 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 600
           script: |
-            BHASH_COMPILER_JAR="$GITHUB_WORKSPACE/.bhash-compiler-ci/target/bhash-compiler-0.1.0-SNAPSHOT.jar" PATH="/usr/lib/llvm-18/bin:$PATH" python -m unittest discover -s tests -p test_android_debug.py -v
+            BHASH_COMPILER_JAR="$RUNNER_TEMP/compiler.jar" PATH="/usr/lib/llvm-18/bin:$PATH" python -m unittest discover -s tests -p test_android_debug.py -v
 
   ci:
     name: CI checks

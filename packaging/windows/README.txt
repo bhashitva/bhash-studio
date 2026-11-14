@@ -27,9 +27,9 @@ legal directory. The corresponding upstream source archive is alongside it
 as payload/java-source.tar.gz.
 https://github.com/adoptium/temurin21-binaries/releases/tag/jdk-21.0.10%2B7
 
-Bhash compiler 0.25.0 (Apache-2.0 and component-specific terms).
+Bhash compiler 0.25.2 (Apache-2.0 and component-specific terms).
 See META-INF/bhash and third-party notices in payload/compiler.jar.
-https://github.com/bhashitva/bhash/releases/tag/bhash-0.25.0
+https://github.com/bhashitva/bhash/releases/tag/bhash-0.25.2
 
 Send2Trash 2.1.0 and pywin32 312 are unmodified upstream wheels.
 Their license files are inside the wheels and are preserved on extraction.
