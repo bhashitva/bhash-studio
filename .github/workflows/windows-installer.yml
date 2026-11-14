@@ -2,6 +2,10 @@ name: Windows installer preview
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/windows-installer.yml'
   pull_request:
     paths:
       - 'packaging/windows/**'
@@ -45,3 +49,24 @@ jobs:
           name: Bhash-Yantra-Windows-x64
           path: dist/Bhash-Yantra-Windows-x64.zip
           if-no-files-found: error
+
+  publish-v020:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Bhash-Yantra-Windows-x64
+          path: dist
+      - name: Publish Yantra v0.2.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum Bhash-Yantra-Windows-x64.zip > Bhash-Yantra-Windows-x64.zip.sha256
+          if gh release view v0.2.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then exit 0; fi
+          gh release create v0.2.0 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest --title "Bhash Yantra v0.2.0" --notes "Adds Bhash source-level debugging for Android. The Windows x64 installer bundles Bhash compiler 0.25.2. Download and extract the installer ZIP directly, then run Install.cmd." Bhash-Yantra-Windows-x64.zip Bhash-Yantra-Windows-x64.zip.sha256
