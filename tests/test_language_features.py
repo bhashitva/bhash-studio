@@ -75,6 +75,10 @@ class LanguageFeaturesTests(unittest.TestCase):
                         editor.event_generate(sequence)
                         root.update()
                         action.assert_called_with(studio, method)
+                with patch("bhash_studio.app.ReferenceWindow") as reference:
+                    editor.event_generate("<Control-Shift-l>")
+                    root.update()
+                    reference.assert_called_once_with(studio, "library")
                 self.assertEqual(editor.get("1.0", "end-1c"), source)
         finally:
             root.destroy()

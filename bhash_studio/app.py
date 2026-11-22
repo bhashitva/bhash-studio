@@ -254,6 +254,7 @@ class Studio:
         vertical = ttk.Scrollbar(frame, orient="vertical", command=editor.yview)
         for _, _, method, shortcut in ACTIONS:
             editor.bind(shortcut, lambda _event, method=method: self.invoke_language(method))
+        editor.bind("<Control-Shift-l>", lambda _event: self.open_reference())
         horizontal = ttk.Scrollbar(frame, orient="horizontal", command=editor.xview)
         editor.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
         frame.rowconfigure(0, weight=1)
@@ -430,8 +431,8 @@ class Studio:
 
         add(dropdown("औज़ार"), "tools", "औज़ार सेटिंग…", self.settings)
         help_menu = dropdown("सहायता")
-        add(help_menu, "library_lookup", "मानक पुस्तकालय खोजें…", lambda: ReferenceWindow(self), "<Control-Shift-l>", "Ctrl+Shift+L")
-        add(help_menu, "language_lookup", "शब्द और ढाँचे खोजें…", lambda: ReferenceWindow(self, "language"))
+        add(help_menu, "library_lookup", "मानक पुस्तकालय खोजें…", self.open_reference, "<Control-Shift-l>", "Ctrl+Shift+L")
+        add(help_menu, "language_lookup", "शब्द और ढाँचे खोजें…", lambda: self.open_reference("language"))
         for key, title, path in (
             ("book", "हिन्दी प्रोग्रामिंग पुस्तक", "book"),
             ("null_safety_guide", "रिक्त-सुरक्षा सीखें", "tutorial/null-safety"),
@@ -485,6 +486,10 @@ class Studio:
                 label=filename, value=filename, variable=self.selected_file,
                 command=lambda name=filename: self.guard(lambda: self.select_file(name)),
             )
+
+    def open_reference(self, mode="library"):
+        ReferenceWindow(self, mode)
+        return "break"
 
     def invoke_language(self, method):
         self.guard(lambda: language_action(self, method))
