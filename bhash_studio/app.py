@@ -30,7 +30,7 @@ from .settings import (load_project_session, load_session, load_settings,
 from .targets import validate_snapshot
 from .signature_help import LanguageServer
 from .lookup import ReferenceWindow
-from .language_actions import language_action
+from .language_actions import ACTIONS, language_action
 from .compiler_options import project_profile, with_profile
 from .web import DEFAULT_PROFILES, WebTarget, validate_profiles, validate_web
 
@@ -252,6 +252,8 @@ class Studio:
                              undo=True, wrap="none", font=("Nirmala UI", 13),
                              padx=12, pady=12, background="#f7f9fc", foreground="#182d43", insertwidth=2)
         vertical = ttk.Scrollbar(frame, orient="vertical", command=editor.yview)
+        for _, _, method, shortcut in ACTIONS:
+            editor.bind(shortcut, lambda _event, method=method: self.invoke_language(method))
         horizontal = ttk.Scrollbar(frame, orient="horizontal", command=editor.xview)
         editor.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
         frame.rowconfigure(0, weight=1)
@@ -400,14 +402,7 @@ class Studio:
         add(file_menu, "exit", "बंद करें", self.close)
 
         edit_menu = dropdown("संपादन")
-        for key, title, method, shortcut in (
-            ("completion", "कंपाइलर से कोड पूरा करें", "completion", "<Control-Shift-space>"),
-            ("hover", "प्रकार और विवरण", "hover", "<Control-k>"),
-            ("definition", "परिभाषा पर जाएँ", "definition", "<F12>"),
-            ("references", "उपयोग खोजें", "references", "<Shift-F12>"),
-            ("rename", "नाम सभी जगह बदलें…", "rename", "<F2>"),
-            ("quick_fix", "सुझाए सुधार…", "codeAction", "<Control-period>"),
-        ):
+        for key, title, method, shortcut in ACTIONS:
             add(edit_menu, key, title, lambda method=method: language_action(self, method), shortcut)
         for action, label, key in COMMANDS:
             edit_menu.add_command(label=label, accelerator=accelerator + key.upper(),
@@ -490,6 +485,10 @@ class Studio:
                 label=filename, value=filename, variable=self.selected_file,
                 command=lambda name=filename: self.guard(lambda: self.select_file(name)),
             )
+
+    def invoke_language(self, method):
+        self.guard(lambda: language_action(self, method))
+        return "break"
 
     def language_profile(self):
         if not self.project:

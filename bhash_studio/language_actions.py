@@ -10,6 +10,16 @@ from .clipboard import ReadOnlyText
 from .errors import StudioError
 
 
+ACTIONS = (
+    ("completion", "कंपाइलर से कोड पूरा करें", "completion", "<Control-Shift-space>"),
+    ("hover", "प्रकार और विवरण", "hover", "<Control-k>"),
+    ("definition", "परिभाषा पर जाएँ", "definition", "<F12>"),
+    ("references", "उपयोग खोजें", "references", "<Shift-F12>"),
+    ("rename", "नाम सभी जगह बदलें…", "rename", "<F2>"),
+    ("quick_fix", "सुझाए सुधार…", "codeAction", "<Control-period>"),
+)
+
+
 def offset_at(source, position):
     lines = source.splitlines(keepends=True)
     line, character = position["line"], position["character"]

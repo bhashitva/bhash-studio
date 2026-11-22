@@ -57,6 +57,29 @@ class LanguageFeaturesTests(unittest.TestCase):
                 server.close()
 
     @unittest.skipUnless(os.environ.get("BHASH_STUDIO_GUI_TESTS") == "1", "Needs desktop")
+    def test_editor_shortcuts_reach_language_actions_without_mutating_source(self):
+        import tkinter as tk
+        from unittest.mock import patch
+        from bhash_studio.app import Studio
+        root = tk.Tk()
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                studio = Studio(root, Project.create(Path(temp) / "demo", "Demo"),
+                                settings_file=Path(temp) / "settings.json")
+                editor = studio.editor
+                editor.focus_force()
+                root.update()
+                source = editor.get("1.0", "end-1c")
+                with patch("bhash_studio.app.language_action") as action:
+                    for sequence, method in (("<Control-k>", "hover"), ("<Control-Shift-space>", "completion")):
+                        editor.event_generate(sequence)
+                        root.update()
+                        action.assert_called_with(studio, method)
+                self.assertEqual(editor.get("1.0", "end-1c"), source)
+        finally:
+            root.destroy()
+
+    @unittest.skipUnless(os.environ.get("BHASH_STUDIO_GUI_TESTS") == "1", "Needs desktop")
     def test_reference_insertion_selection_undo_and_stale_source(self):
         import tkinter as tk
         from types import SimpleNamespace
