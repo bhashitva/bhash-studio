@@ -14,7 +14,7 @@ HASHES = {
     "python.exe": "96159fcb523ae404b707186a75b4104ee23851e476a5e838e14584cf1e03f981",
     "java.zip": "08cae782814f027f8b159d6b68823f0f87422eb475c1a0ea1abc7a4357aaf11f",
     "java-source.tar.gz": "a286b69953cdb56ab2dc74287e6ebaca8fad7d397a4b5f975b73d23eedeec252",
-    "compiler.jar": "e95e721cc4b30b28f6566374d98fa7f75c7818906b11c8437140f986825bce36",
+    "compiler.jar": "8fbcef3abb5a56f0a13d41c0d66cdcae00dfc2656f481f578d97d82cd0863fd0",
     "send2trash-2.1.0-py3-none-any.whl": "0da2f112e6d6bb22de6aa6daa7e144831a4febf2a87261451c4ad849fe9a873c",
     "pywin32-312-cp311-cp311-win_amd64.whl": "d11417d84412f859b722fad0841b3614459ed0047f7542d8362e77884f6b6e8a",
     "pywin32-312-cp312-cp312-win_amd64.whl": "b457f6d628a47e8a7346ce22acb7e1a46a4a78b52e1d17e1af56871bd19a93bc",

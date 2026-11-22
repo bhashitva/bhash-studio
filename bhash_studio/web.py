@@ -10,6 +10,7 @@ import uuid
 from .android import run_tool
 from .config import loads, validate_config
 from .errors import StudioError
+from .compiler_options import project_profile, with_profile
 from .project import BUILD_DIRECTORY, CONFIG, SCRATCH_DIRECTORY, SOURCE, WEB_ASSETS, WEB_PAGE, WEB_PROFILES, atomic_write
 
 
@@ -82,7 +83,7 @@ class WebTarget:
                 path = source_root / filename
                 path.parent.mkdir(parents=True, exist_ok=True)
                 atomic_write(path, text)
-        atomic_write(job / "bhash.project", "name=yantra-web\nsources=src\n")
+        atomic_write(job / "bhash.project", with_profile("name=yantra-web\nsources=src\n", project_profile(project, snapshot)))
         shutil.copyfile(self.tools.compiler, job / "compiler.jar")
         report(f"वेब निर्माण — {profile}\nकंपाइलर लॉग — {log}")
         executable = ("server.exe" if os.name == "nt" else "server") if debug else "app.jar"

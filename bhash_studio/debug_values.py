@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Read-only Bhash ABI 17 value inspection in LLDB's Python interpreter."""
+"""Read-only Bhash ABI 17 and 18 value inspection in LLDB's Python interpreter."""
 
 import base64
 import json
@@ -52,7 +52,7 @@ class Inspection:
             if not 0 < length <= 4 * 1024 * 1024:
                 raise ValueError("Invalid debug schema")
             data = json.loads(self.read(address + 8, length))
-            if data.get("version") != 1 or data.get("abi") != 17:
+            if data.get("version") != 1 or data.get("abi") not in (17, 18):
                 raise ValueError("Unsupported debug schema")
             self.layout = data
         return self.layout

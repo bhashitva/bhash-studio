@@ -8,6 +8,7 @@ import tkinter as tk
 from .bhash_syntax import analyze, standard_library
 from .errors import StudioError
 from .signature_help import call_site
+from .lookup import plain_template
 
 
 class BhashEditor(tk.Text):
@@ -20,6 +21,7 @@ class BhashEditor(tk.Text):
         self.syntax_check = syntax_check
         self.compiler_path = compiler_path
         self.signature_check = signature_check
+        self.placeholders = []
         self.signature_display = None
         self.signature_timer = None
         self.signature_future = None
@@ -233,6 +235,13 @@ class BhashEditor(tk.Text):
         if self.completion is not None:
             self.apply_choice(self.choices.curselection()[0])
             return "break"
+        if getattr(_event, "keysym", "") == "Tab" and self.placeholders:
+            start, end = self.placeholders.pop(0)
+            self.tag_remove("sel", "1.0", "end")
+            self.tag_add("sel", start, end)
+            self.mark_set("insert", start)
+            self.see(start)
+            return "break"
         return None
 
     def apply_choice(self, choice):
@@ -249,6 +258,38 @@ class BhashEditor(tk.Text):
         before = before.replace("\n", "\n" + indent)
         after = after.replace("\n", "\n" + indent)
         self.insert_text(start, end, before, after)
+        self.focus_set()
+
+    def insert_template(self, template, keyword=False):
+        if not self.source_mode or str(self.cget("state")) != "normal":
+            return
+        selection = self.tag_ranges("sel")
+        start, end = map(self.index, selection if selection else ("insert", "insert"))
+        indent = re.match(r"[ \t]*", self.get(f"{start} linestart", start))[0]
+        template = template.replace("\n", "\n" + indent)
+        text, spans = plain_template(template)
+        if keyword:
+            left = self.get(f"{start} -1c", start)
+            right = self.get(end, f"{end} +1c")
+            is_word = lambda value: bool(value and re.match(r"[\w\u0900-\u097f\u200c\u200d]", value))
+            text = (" " if is_word(left) else "") + text + (" " if not right or is_word(right) else "")
+        for first, last in self.placeholders:
+            self.mark_unset(first, last)
+        self.placeholders = []
+        self.insert_text(start, end, text)
+        for number, (first, last) in enumerate(spans):
+            begin, finish = f"snippet_{number}_start", f"snippet_{number}_end"
+            offset = self.tk.call("string", "length", text[:first])
+            length = self.tk.call("string", "length", text[first:last])
+            self.mark_set(begin, f"{start} +{offset}c")
+            self.mark_gravity(begin, "left")
+            self.mark_set(finish, f"{begin} +{length}c")
+            self.mark_gravity(finish, "right")
+            self.placeholders.append((begin, finish))
+        if self.placeholders:
+            begin, finish = self.placeholders.pop(0)
+            self.tag_add("sel", begin, finish)
+            self.mark_set("insert", begin)
         self.focus_set()
 
     def insert_text(self, start, end, before, after=""):

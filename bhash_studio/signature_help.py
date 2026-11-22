@@ -14,8 +14,9 @@ from threading import Thread
 from unicodedata import normalize
 from urllib.parse import quote
 
-from .bhash_syntax import STDLIB_IMPORT, TOKENS, WORD
+from .bhash_syntax import STDLIB_IMPORT, TOKENS, WORD, display_diagnostic
 from .errors import StudioError
+from .compiler_options import project_profile
 
 
 CALL_TOKENS = re.compile(rf"{TOKENS.pattern}|(?P<delimiter>[(){{}}\[\];])")
@@ -144,8 +145,7 @@ class LanguageServer:
                     headers[key.lower()] = value.strip()
                     header = stream.readline()
                 message = json.loads(stream.read(int(headers["content-length"])))
-                if "id" in message:
-                    responses.put(message)
+                responses.put(message)
         except (OSError, ValueError, KeyError):
             pass
         finally:
@@ -160,7 +160,16 @@ class LanguageServer:
         self.process.stdin.write(f"Content-Length: {len(data)}\r\n\r\n".encode("ascii") + data)
         self.process.stdin.flush()
         if request:
-            response = self.responses.get(timeout=15)
+            while True:
+                try:
+                    response = self.responses.get(timeout=45)
+                except Empty as error:
+                    self.close()
+                    raise StudioError("कंपाइलर की भाषा सहायता का समय पूरा हुआ। आदेश फिर चलाएँ।") from error
+                if response is None or "id" in response:
+                    break
+                if response.get("method") == "textDocument/publishDiagnostics":
+                    self.diagnostics[response["params"]["uri"]] = response["params"]["diagnostics"]
             if response is None or response.get("id") != self.serial or "error" in response:
                 raise OSError("Bhash language server request failed")
             return response.get("result")
@@ -171,7 +180,8 @@ class LanguageServer:
         root = Path(self.scratch.name)
         self.source_root = root / "src"
         self.source_root.mkdir()
-        (root / "bhash.project").write_text("name=yantra\nsources=src\nkind=application\n", encoding="utf-8")
+        selected = identity[5] if len(identity) > 5 else "legacy"
+        (root / "bhash.project").write_text("name=yantra\nsources=src\nkind=application\nnullSafety=" + selected + "\n", encoding="utf-8")
         jar = str(Path(tools.compiler).resolve())
         if not jar.isascii():
             shutil.copyfile(jar, root / "compiler.jar")
@@ -183,10 +193,29 @@ class LanguageServer:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         self.responses = Queue()
+        self.diagnostics = {}
         Thread(target=self.read_responses, args=(self.process.stdout, self.responses), daemon=True).start()
         self.send("initialize", {"rootUri": root.as_uri(), "capabilities": {}}, request=True)
         self.send("initialized", {})
         self.identity = identity
+
+    def request(self, tools, project, filename, buffers, caret, method, extra=None):
+        tools.validate()
+        jar = Path(tools.compiler).stat()
+        identity = (project.root, tools.compiler, tools.java, jar.st_mtime_ns, jar.st_size, project_profile(project, buffers))
+        if self.identity != identity:
+            self.start(tools, identity)
+        self.sync(project.source_snapshot(buffers))
+        document = {"uri": (self.source_root / filename).as_uri()}
+        location = position(buffers[filename], caret)
+        params = {"textDocument": document, "position": location, **(extra or {})}
+        if method == "codeAction":
+            # A hover is a barrier after didChange, allowing diagnostics to arrive first.
+            self.send("textDocument/hover", params, request=True)
+            params = {"textDocument": document, "range": {"start": location, "end": location},
+                      "context": {"diagnostics": self.diagnostics.get(document["uri"], [])}}
+        result = self.send("textDocument/" + method, params, request=True)
+        return result, self.source_root, dict(self.documents)
 
     def sync(self, sources):
         for name in self.documents.keys() - sources.keys():
@@ -207,11 +236,25 @@ class LanguageServer:
                                                     "contentChanges": [{"text": source}]})
                 self.documents[name] = (version, source)
 
+    def diagnose(self, tools, project, filename, buffers):
+        self.request(tools, project, filename, buffers, 0, "hover")
+        uri = (self.source_root / filename).as_uri()
+        lines = buffers[filename].splitlines()
+        rows = []
+        for diagnostic in self.diagnostics.get(uri, []):
+            if diagnostic.get("severity", 1) > 2:
+                continue
+            start = diagnostic["range"]["start"]
+            line = lines[start["line"]] if start["line"] < len(lines) else ""
+            prefix = line.encode("utf-16-le")[:start["character"] * 2].decode("utf-16-le", "replace")
+            rows.append((start["line"] + 1, len(prefix) + 1, display_diagnostic(diagnostic["message"])))
+        return tuple(rows)
+
     def help(self, tools, project, filename, buffers, caret, site):
         try:
             tools.validate()
             jar = Path(tools.compiler).stat()
-            identity = (project.root, tools.compiler, tools.java, jar.st_mtime_ns, jar.st_size)
+            identity = (project.root, tools.compiler, tools.java, jar.st_mtime_ns, jar.st_size, project_profile(project, buffers))
             if self.identity != identity:
                 self.start(tools, identity)
             sources = project.source_snapshot(buffers)

@@ -1,4 +1,4 @@
-"""Lightweight editor tokenization for the Bhash 0.25.0 grammar."""
+"""Lightweight editor tokenization backed by the shared Bhash reference."""
 
 from dataclasses import dataclass
 from functools import lru_cache
@@ -11,16 +11,11 @@ from unicodedata import normalize
 from zipfile import BadZipFile, ZipFile
 
 from .errors import StudioError
+from .lookup import catalog
 
 
-# Keep these spellings aligned with the compiler release pinned by AndroidTarget.
-KEYWORDS = tuple("""
-संकुल आयात उपनाम फलन असमकालिक प्रतीक्षा वर्ग अभिलेख परिगणना परिवर्तित प्रकारहै
-सुरक्षितरूप अनुबंध पालन साझा विस्तार निर्माता नया यह आधार सार्वजनिक निजी संरक्षित
-अधिलेखन रिक्त मान स्थिर यदि अन्यथा जबतक प्रत्येक में चयन विकल्प शेष संसाधन
-प्रयास पकड़ो अंततः फेंको लौटाओ विराम जारी लिखो पूर्णांक बाइट लघुपूर्णांक सर्ववस्तु
-बाइटबफ़र दशमलव तार्किक पाठ शून्य सत्य असत्य
-""".split())
+# The shared catalog follows the compiler grammar and contextual words.
+KEYWORDS = tuple(entry["value"] for entry in catalog()["language"] if entry["kind"] == "keywords")
 KEYWORD_FOR = {normalize("NFC", word): word for word in KEYWORDS}
 # Each pair surrounds the caret after insertion.
 CONSTRUCTS = {
@@ -181,7 +176,8 @@ def analyze(source, caret=None, imports=CORE_IMPORTS, methods=None):
         start, end = token.span()
         word = token.group()
         canonical = normalize("NFC", word)
-        if canonical in KEYWORD_FOR:
+        contextual = {"विकल्पसमूह": r"\s+[^\W\d]\w*", "मिलान": r"\s*\([^()\r\n]*\)\s*\{"}
+        if canonical in KEYWORD_FOR and (word not in contextual or re.match(contextual[word], source[end:])):
             ranges.append((start, end))
         if caret is not None and start < caret <= end:
             active = (start, end, canonical)
