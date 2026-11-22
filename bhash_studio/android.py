@@ -13,6 +13,7 @@ import uuid
 import xml.etree.ElementTree as ET
 
 from .errors import StudioError
+from .compiler_options import project_profile, with_profile
 from .layout import handlers, walk
 from .project import BUILD_DIRECTORY, CONFIG, LAYOUT, LocalPath as Path, atomic_write
 from .targets import require_android, validate_snapshot
@@ -431,6 +432,9 @@ class AndroidTarget:
         self.runner(self.command(["android", "init", str(output), "--id", config["ऐप_पहचान"], "--name", config["नाम"]]),
                     job, self.tools.environment(), log, cancel)
         source = output / "src"
+        manifest = output / "bhash.project"
+        if manifest.is_file():
+            atomic_write(manifest, with_profile(manifest.read_text(encoding="utf-8"), project_profile(project, snapshot)))
         for file in source.rglob("*.bhash"):
             file.unlink()
         for name, text in snapshot.items():

@@ -1,6 +1,7 @@
 """Start Yantra using the paths selected by Windows setup."""
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import site
@@ -28,11 +29,21 @@ def main():
         # Keep working user overrides and fill paths that were never configured.
         try:
             saved, device = load_settings(path, defaults)
+            previous_settings = saved
+            previous_compiler = Path(saved.compiler)
+            bundled = Path(defaults.compiler)
+            if (previous_compiler.is_file() and previous_compiler.parent == bundled.parent
+                    and previous_compiler.name in {"bhash-compiler-0.25.0.jar", "bhash-compiler-0.25.2.jar"}):
+                known = {"9e353b85365c50367ec008486d8ef83eeeb550a1dd9dbcc9d889f79dab904162",
+                         "e95e721cc4b30b28f6566374d98fa7f75c7818906b11c8437140f986825bce36"}
+                if hashlib.sha256(previous_compiler.read_bytes()).hexdigest() in known:
+                    from dataclasses import replace
+                    saved = replace(saved, compiler=defaults.compiler)
             tools = Toolchain(**{
                 name: value if value and Path(value).exists() else getattr(defaults, name)
                 for name, value in vars(saved).items()
             })
-            if tools != saved:
+            if tools != previous_settings:
                 save_settings(path, tools, device)
         except (OSError, ValueError, StudioError):
             pass

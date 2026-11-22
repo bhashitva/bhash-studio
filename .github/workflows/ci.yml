@@ -41,12 +41,16 @@ jobs:
         if: runner.os == 'Windows'
         env:
           BHASH_STUDIO_GUI_TESTS: '1'
-        run: python -m unittest discover -s tests -p test_gui.py -v
+        run: |
+          python -m unittest discover -s tests -p test_gui.py -v
+          python -m unittest discover -s tests -p test_language_features.py -v
       - name: Linux desktop workflow
         if: runner.os == 'Linux'
         env:
           BHASH_STUDIO_GUI_TESTS: '1'
-        run: xvfb-run -a python -m unittest discover -s tests -p test_gui.py -v
+        run: |
+          xvfb-run -a python -m unittest discover -s tests -p test_gui.py -v
+          xvfb-run -a python -m unittest discover -s tests -p test_language_features.py -v
 
   package:
     name: Python package
@@ -120,9 +124,12 @@ jobs:
         run: |
           mkdir -p "$(dirname "$BHASH_COMPILER_JAR")"
           curl --fail --location --retry 3 \
-            https://github.com/bhashitva/bhash/releases/download/bhash-0.25.2/bhash-compiler-0.25.2.jar \
+            https://github.com/bhashitva/bhash/releases/download/bhash-0.28.0/bhash-compiler-0.28.0.jar \
             --output "$BHASH_COMPILER_JAR"
-          echo "e95e721cc4b30b28f6566374d98fa7f75c7818906b11c8437140f986825bce36  $BHASH_COMPILER_JAR" | sha256sum --check
+          echo "8fbcef3abb5a56f0a13d41c0d66cdcae00dfc2656f481f578d97d82cd0863fd0  $BHASH_COMPILER_JAR" | sha256sum --check
+      - name: Verify compiler-backed editor assistance
+        if: matrix.api == 29
+        run: python -m unittest discover -s tests -p test_language_features.py -v
       - name: Build and exercise a real web application
         if: matrix.api == 29
         env:
@@ -212,8 +219,8 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - name: Fetch checksum-pinned Bhash compiler
         run: |
-          curl --fail --location --retry 3 https://github.com/bhashitva/bhash/releases/download/bhash-0.25.2/bhash-compiler-0.25.2.jar --output "$RUNNER_TEMP/compiler.jar"
-          echo "e95e721cc4b30b28f6566374d98fa7f75c7818906b11c8437140f986825bce36  $RUNNER_TEMP/compiler.jar" | sha256sum --check
+          curl --fail --location --retry 3 https://github.com/bhashitva/bhash/releases/download/bhash-0.28.0/bhash-compiler-0.28.0.jar --output "$RUNNER_TEMP/compiler.jar"
+          echo "8fbcef3abb5a56f0a13d41c0d66cdcae00dfc2656f481f578d97d82cd0863fd0  $RUNNER_TEMP/compiler.jar" | sha256sum --check
       - name: Debug Bhash source on the Android emulator
         env:
           BHASH_STUDIO_ANDROID_DEBUG_TESTS: '1'

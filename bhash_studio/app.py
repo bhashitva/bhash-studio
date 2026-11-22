@@ -29,6 +29,9 @@ from .settings import (load_project_session, load_session, load_settings,
                        save_project_session, save_session, save_settings, settings_path)
 from .targets import validate_snapshot
 from .signature_help import LanguageServer
+from .lookup import ReferenceWindow
+from .language_actions import ACTIONS, language_action
+from .compiler_options import project_profile, with_profile
 from .web import DEFAULT_PROFILES, WebTarget, validate_profiles, validate_web
 
 
@@ -243,12 +246,15 @@ class Studio:
     def open_tab(self, filename):
         frame = ttk.Frame(self.notebook)
         source_mode = Path(filename).suffix == ".bhash"
-        editor = BhashEditor(frame, syntax_check=self.submit_syntax,
+        editor = BhashEditor(frame, syntax_check=lambda source: self.submit_syntax(source, filename),
                              compiler_path=lambda: self.compiler_override or self.tools.compiler,
                              signature_check=lambda caret, site: self.submit_signature(filename, caret, site),
                              undo=True, wrap="none", font=("Nirmala UI", 13),
                              padx=12, pady=12, background="#f7f9fc", foreground="#182d43", insertwidth=2)
         vertical = ttk.Scrollbar(frame, orient="vertical", command=editor.yview)
+        for _, _, method, shortcut in ACTIONS:
+            editor.bind(shortcut, lambda _event, method=method: self.invoke_language(method))
+        editor.bind("<Control-Shift-L>", lambda _event: self.open_reference())
         horizontal = ttk.Scrollbar(frame, orient="horizontal", command=editor.xview)
         editor.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
         frame.rowconfigure(0, weight=1)
@@ -293,8 +299,12 @@ class Studio:
         self.notebook.add(frame, text=filename)
         return editor
 
-    def submit_syntax(self, source):
+    def submit_syntax(self, source, filename=None):
         tools = replace(self.tools, compiler=self.compiler_override) if self.compiler_override else self.tools
+        if self.project and filename:
+            buffers = {name: self.file_text(name) for name in self.editors if name.endswith(".bhash")}
+            buffers[filename] = source
+            return self.signature_pool.submit(self.language_server.diagnose, tools, self.project, filename, buffers)
         return self.syntax_pool.submit(check_syntax, tools, source)
 
     def submit_signature(self, filename, caret, site):
@@ -393,12 +403,15 @@ class Studio:
         add(file_menu, "exit", "बंद करें", self.close)
 
         edit_menu = dropdown("संपादन")
+        for key, title, method, shortcut in ACTIONS:
+            add(edit_menu, key, title, lambda method=method: language_action(self, method), shortcut)
         for action, label, key in COMMANDS:
             edit_menu.add_command(label=label, accelerator=accelerator + key.upper(),
                                   command=lambda action=action: clipboard_action(self.root.focus_get(), action))
 
         project_menu = dropdown("परियोजना")
         add(project_menu, "check", "परियोजना जाँचें", self.validate)
+        add(project_menu, "language_profile", "रिक्त-सुरक्षा परिवेश…", self.language_profile)
         add(project_menu, "breakpoint", "विराम बिंदु लगाएँ या हटाएँ", self.toggle_breakpoint, "<F9>", "F9")
 
         android_menu = dropdown("एंड्रॉयड")
@@ -417,7 +430,17 @@ class Studio:
         add(web_menu, "web_stop", "वेब काम रोकें", self.cancel.set)
 
         add(dropdown("औज़ार"), "tools", "औज़ार सेटिंग…", self.settings)
-        add(dropdown("सहायता"), "help", "भाष यंत्र सहायता", self.help, "<F1>", "F1")
+        help_menu = dropdown("सहायता")
+        add(help_menu, "library_lookup", "मानक पुस्तकालय खोजें…", self.open_reference, "<Control-Shift-L>", "Ctrl+Shift+L")
+        add(help_menu, "language_lookup", "शब्द और ढाँचे खोजें…", lambda: self.open_reference("language"))
+        for key, title, path in (
+            ("book", "हिन्दी प्रोग्रामिंग पुस्तक", "book"),
+            ("null_safety_guide", "रिक्त-सुरक्षा सीखें", "tutorial/null-safety"),
+            ("language_guide", "नई भाषा सुविधाएँ सीखें", "tutorial/safer-everyday"),
+            ("compression_guide", "संपीड़न और C लाइब्रेरी", "tutorial/compression"),
+        ):
+            add(help_menu, key, title, lambda path=path: webbrowser.open("https://github.com/bhashitva/bhash/tree/main/" + path))
+        add(help_menu, "help", "भाष यंत्र सहायता", self.help, "<F1>", "F1")
         self.update_menu_state()
 
     def update_menu_state(self):
@@ -437,6 +460,8 @@ class Studio:
             elif key == "breakpoint":
                 enabled = bool(self.active and self.active.endswith(".bhash")) and (
                     self.debug_commands is None or self.active in self.debug_sources)
+            elif key in {"completion", "hover", "definition", "references", "rename", "quick_fix"}:
+                enabled = bool(self.active and self.active.endswith(".bhash")) and not busy
             elif key in {"files", "new_file", "import_file"}:
                 enabled = self.project is not None
             elif key == "close_tab":
@@ -461,6 +486,38 @@ class Studio:
                 label=filename, value=filename, variable=self.selected_file,
                 command=lambda name=filename: self.guard(lambda: self.select_file(name)),
             )
+
+    def open_reference(self, mode="library"):
+        ReferenceWindow(self, mode)
+        return "break"
+
+    def invoke_language(self, method):
+        self.guard(lambda: language_action(self, method))
+        return "break"
+
+    def language_profile(self):
+        if not self.project:
+            raise StudioError("पहले परियोजना खोलें।")
+        window = tk.Toplevel(self.root)
+        window.title("रिक्त-सुरक्षा परिवेश")
+        window.transient(self.root)
+        selected = tk.StringVar(value=project_profile(self.project))
+        for value, title in (("legacy", "legacy — मौजूदा भाषा व्यवहार"), ("strict", "strict — रिक्त मानों की जाँच")):
+            ttk.Radiobutton(window, text=title, value=value, variable=selected).pack(anchor="w", padx=16, pady=8)
+        def save():
+            name = "bhash.project"
+            path = self.project.file(name)
+            text = self.file_text(name) if name in self.editors else self.project.read(name) if path.is_file() else "name=yantra\nsources=.\n"
+            if not path.is_file():
+                self.project.add_file(name)
+            self.select_file(name)
+            self.editor.insert_text("1.0", "end-1c", with_profile(text, selected.get()))
+            self.save_file(name)
+            window.destroy()
+            for editor in self.editors.values():
+                if editor.source_mode:
+                    editor.schedule_syntax()
+        ttk.Button(window, text="सहेजें", command=lambda: self.guard(save)).pack(pady=12)
 
     def guard(self, action):
         try:
